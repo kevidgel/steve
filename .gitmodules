@@ -1,0 +1,6 @@
+[submodule "ext/owl"]
+	path = ext/owl
+	url = https://github.com/owl-project/owl.git
+[submodule "ext/rapidobj"]
+	path = ext/rapidobj
+	url = https://github.com/guybrush77/rapidobj

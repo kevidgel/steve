@@ -1,0 +1,41 @@
+{
+  "dependencies": [
+    {
+      "name": "fmt",
+      "version>=": "11.0.2#1"
+    },
+    {
+      "name": "fontconfig",
+      "version>=": "2.15.0#1"
+    },
+    {
+      "name": "glad",
+      "version>=": "0.1.36"
+    },
+    "glfw3",
+    "glm",
+    {
+      "name": "imgui",
+      "features": [
+        "freetype",
+        "glfw-binding",
+        "opengl3-binding"
+      ],
+      "version>=": "1.91.0"
+    },
+    "nlohmann-json",
+    {
+      "name": "spdlog",
+      "version>=": "1.14.1"
+    },
+    {
+      "name": "stb",
+      "version>=": "2024-07-29#1"
+    },
+    {
+      "name": "tbb",
+      "version>=": "2021.13.0"
+    },
+    "imguizmo"
+  ]
+}
