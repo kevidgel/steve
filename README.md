@@ -1,4 +1,4 @@
-# steve - just another pathtracer
+# steve - a pathtracer
 
 **15-468 Final Project**
 
