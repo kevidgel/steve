@@ -5,30 +5,10 @@
 
 #pragma once
 
+#include "geometry_defs.cuh"
 #include "owl/common/math/vec.h"
 #include "owl/owl_device.h"
 #include "ray.cuh"
-
-struct Lights {
-    owl::vec3f *verts;
-    owl::vec3ui *vertsI;
-    uint *primsI;
-    uint size;
-};
-
-struct TriangleMesh {
-    owl::vec3f *verts;
-    owl::vec3f *norms;
-    owl::vec2f *texCoords;
-
-    // Indices
-    owl::vec3ui *vertsI;
-    owl::vec3ui *normsI;
-    owl::vec3ui *texCoordsI;
-
-    // Per-face materialId
-    int *matsI;
-};
 
 /// Hit program
 OPTIX_CLOSEST_HIT_PROGRAM(TriangleMesh)() {

@@ -1,16 +1,11 @@
-#include "pathtracer/scene.hpp"
-#include "pathtracer/texture.hpp"
+#include "pathtracer/host/scene.hpp"
+#include "pathtracer/host/texture.hpp"
 
-#include <glm/detail/type_mat4x2.hpp>
 #include <rapidobj/rapidobj.hpp>
 #include <spdlog/spdlog.h>
 #include <unordered_set>
 
 namespace robj = rapidobj;
-
-owl::vec3f toOwlVec3f(const robj::Float3& val) {
-    return {val[0], val[1], val[2]};
-}
 
 SceneBuffer::SceneBuffer(const std::filesystem::path &filename) : filename(filename) {
     // Check existence
@@ -79,41 +74,13 @@ SceneBuffer::SceneBuffer(const std::filesystem::path &filename) : filename(filen
     }
 
     // Parse materials
-    mats.resize(scene.materials.size());
-    for (size_t i = 0; i < scene.materials.size(); ++i) {
-        const auto& objMat = scene.materials[i];
-        Material mat;
-        mat.baseColor = toOwlVec3f(objMat.diffuse);
-        mat.emission = toOwlVec3f(objMat.emission);
-        mat.roughness = objMat.roughness < 0.001 ? 1.f : objMat.roughness;
-        mat.roughness = i % 3 == 1 ? 0.38f : mat.roughness;
-        mat.anisotropic = objMat.anisotropy;
-        mat.subsurface = 0.1f;
-
-        // Attempt to load texture
-        // TODO: Abstract this
-        std::string relTexPath = objMat.diffuse_texname;
-        std::replace(relTexPath.begin(), relTexPath.end(), '\\', '/');
-        std::filesystem::path texPath = fmt::format("{}/{}", filename.parent_path().string(), relTexPath);
-        if (exists(texPath) && is_regular_file(texPath)) {
-            auto texResult = loadImageCuda(texPath);
-            if (texResult.has_value()) {
-                mat.baseColorTex = texResult.value();
-                mat.hasBaseColorTex = true;
-            } else {
-                mat.hasBaseColorTex = false;
-            }
-        } else {
-            mat.hasBaseColorTex = false;
-        }
-        mats[i] = mat;
-    }
+    materialBuffer = MaterialBuffer(scene, filename);
 
     size_t offsetMat = 0;
     for (const auto &shape : scene.shapes) {
         for (int material_id : shape.mesh.material_ids) {
             matsI[offsetMat] = material_id;
-            if (length(mats[material_id].emission) > 0.01f) {
+            if (luminance(materialBuffer.mats[material_id].emission) > 0.01f) {
                 lightPrimsI.push_back((int)offsetMat);
             }
             ++offsetMat;
@@ -140,11 +107,12 @@ SceneBuffer::SceneBuffer(const std::filesystem::path &filename) : filename(filen
         );
     }
 
+    // Check if lights mesh is valid
     for (size_t i = 0; i < lightPrimsI.size(); i++) {
         bool xMatch = lightVerts[lightVertsI[i].x] == verts[vertsI[lightPrimsI[i]].x];
         bool yMatch = lightVerts[lightVertsI[i].y] == verts[vertsI[lightPrimsI[i]].y];
         bool zMatch = lightVerts[lightVertsI[i].z] == verts[vertsI[lightPrimsI[i]].z];
-        bool isEmit = length(mats[matsI[lightPrimsI[i]]].emission) > 0.f;
+        bool isEmit = length(materialBuffer.mats[matsI[lightPrimsI[i]]].emission) > 0.f;
         if (!(xMatch && yMatch && zMatch && isEmit)) {
             spdlog::error("Check failed!");
         }
@@ -152,7 +120,7 @@ SceneBuffer::SceneBuffer(const std::filesystem::path &filename) : filename(filen
 
     spdlog::info("Loaded file {}", filename.string());
     spdlog::info("Shapes: {}", scene.shapes.size());
-    spdlog::info("Materials: {}", mats.size());
+    spdlog::info("Materials: {}", materialBuffer.mats.size());
     spdlog::info("Num Triangles: {}", vertsI.size());
     spdlog::info("Num Emissive Triangles: {}", lightVertsI.size());
 }

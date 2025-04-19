@@ -28,14 +28,17 @@ add_subdirectory(ext/rapidobj)
 # Trace PTX compilation
 enable_language(CUDA)
 set(trace_srcs
-        src/pathtracer/integrator.cu
+        src/pathtracer/device/integrator.cu
 )
 set(trace_headers
-        include/pathtracer/integrator.cuh
-        include/pathtracer/geometry.cuh
-        include/pathtracer/ray.cuh
-        include/pathtracer/material.cuh
-        include/pathtracer/sampling.cuh
+        include/pathtracer/device/integrator.cuh
+        include/pathtracer/device/geometry.cuh
+        include/pathtracer/device/ray.cuh
+        include/pathtracer/device/material.cuh
+        include/pathtracer/device/sampling.cuh
+        include/pathtracer/shared/geometry_defs.cuh
+        include/pathtracer/shared/material_defs.cuh
+        include/pathtracer/shared/integrator_defs.cuh
 )
 add_library(trace
         OBJECT
@@ -47,7 +50,8 @@ target_link_libraries(trace
 )
 target_include_directories(trace
         PRIVATE
-        include/pathtracer
+        include/pathtracer/device
+        include/pathtracer/shared
 )
 set_target_properties(trace
         PROPERTIES
@@ -63,7 +67,7 @@ target_compile_options(trace
 file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/generated/")
 
 # NOTE: This is super hacky
-set(PTX_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/trace.dir/src/pathtracer/integrator.ptx")
+set(PTX_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/trace.dir/src/pathtracer/device/integrator.ptx")
 get_filename_component(PTX_NAME ${PTX_SOURCE} NAME_WE)
 set(PTX_OUTPUT_DIR "${PROJECT_BINARY_DIR}/generated")
 set(PTX_OUTPUT "${PTX_OUTPUT_DIR}/${PTX_NAME}.ptx.hpp")
@@ -93,25 +97,27 @@ target_include_directories(embed_shaders
 )
 
 set(steve_headers
-        include/context.hpp
         include/app/display.hpp
-        include/pathtracer/render.hpp
-        include/pathtracer/scene.hpp
-        include/pathtracer/texture.hpp
-        include/pathtracer/camera.hpp
-        include/pathtracer/parser.hpp
-        include/pathtracer/host_defs.hpp
+        include/pathtracer/host/render.hpp
+        include/pathtracer/host/scene.hpp
+        include/pathtracer/host/texture.hpp
+        include/pathtracer/host/camera.hpp
+        include/pathtracer/host/parser.hpp
+        include/pathtracer/host/material_buffer.hpp
+        include/pathtracer/shared/integrator_defs.cuh
+        include/pathtracer/shared/material_defs.cuh
+        include/pathtracer/shared/geometry_defs.cuh
         include/utils/shader.hpp
 )
 
 set(steve_srcs
         src/app/app.cpp
         src/app/display.cpp
-        src/pathtracer/render.cpp
-        src/pathtracer/scene.cpp
-        src/pathtracer/texture.cpp
-        src/pathtracer/camera.cpp
-        src/pathtracer/parser.cpp
+        src/pathtracer/host/render.cpp
+        src/pathtracer/host/scene.cpp
+        src/pathtracer/host/texture.cpp
+        src/pathtracer/host/parser.cpp
+        src/pathtracer/host/material_buffer.cpp
         src/utils/shader.cpp
 )
 
@@ -124,6 +130,7 @@ add_library(steve_lib STATIC
 target_include_directories(steve_lib PUBLIC
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/ext/owl/owl/include
+        ${CMAKE_SOURCE_DIR}/ext/rapidobj/include
         ${CMAKE_CURRENT_BINARY_DIR}/generated
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
         ${OptiX_ROOT_DIR}/include

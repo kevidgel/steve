@@ -5,14 +5,15 @@
 
 #pragma once
 
-#include "context.hpp"
 #include "owl/owl.h"
-#include "scene.hpp"
+#include "pathtracer/host/camera.hpp"
+#include "pathtracer/shared/integrator_defs.cuh"
 #include "utils/shader.hpp"
+#include "scene.hpp"
 
 class Render {
   public:
-    explicit Render(const Context &ctx, std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camera,
+    explicit Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camera,
                     const std::filesystem::path &envFilename);
     ~Render();
 
@@ -37,7 +38,6 @@ class Render {
     void render();
 
   private:
-    Context ctx;
 
     static void logInfo(const std::string &log);
     void update();
@@ -78,11 +78,10 @@ class Render {
         OWLTexture envMap;
     } owl{};
 
-    float pitch = 0.f, yaw = 0.f;
     Frame frame{};
     Camera camera{};
     Camera oldCamera{};
-    bool accumFrames = true;
+    bool accumFrames = false;
 
     cudaGraphicsResource *pbo = nullptr;
 };

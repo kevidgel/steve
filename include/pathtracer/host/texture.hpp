@@ -5,8 +5,8 @@
 
 #pragma once
 
-#include "owl/Object.h"
-#include "owl/owl.h"
+#include "../../../ext/owl/owl/Object.h"
+#include "../../../ext/owl/owl/include/owl/owl.h"
 
 #include <filesystem>
 #include <optional>

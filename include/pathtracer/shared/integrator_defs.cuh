@@ -1,22 +1,16 @@
 /**
- * @file integrator.cuh
- * @brief Definitions for integrator
+ * @file integrator_defs.cuh
+ * @brief Shared definitions for integrator between host and device code
  */
+
 #pragma once
 
-#include "material.cuh"
+#include "material_defs.cuh"
+#include "geometry_defs.cuh"
+#include "owl/owl.h"
 #include "owl/common/math/vec.h"
 
 #include <cuda_runtime.h>
-
-struct ScatterRecord {
-    owl::vec3f dir;
-    owl::vec3f p;
-    float pdf; // w.r.t solid angle
-
-    // light sample
-    uint primI;
-};
 
 struct affine3f_ {
     owl::vec3f p;
@@ -31,6 +25,7 @@ struct DeviceCamera {
     owl::vec2i resolution;
     float focalDist;
     float apertureRadius;
+    int integrator;
 };
 
 struct Frame {
@@ -57,5 +52,3 @@ struct MissProgData {
     bool hasEnvMap;
     cudaTextureObject_t envMap;
 };
-
-__constant__ LaunchParams optixLaunchParams;

@@ -1,15 +1,12 @@
+#include "ray.cuh"
 #include "geometry.cuh"
 #include "integrator.cuh"
-#include "ray.cuh"
+#include "material.cuh"
 
 #include <optix_device.h>
 
-#define SPP 4
-#define MAX_DEPTH 8
-
-__inline__ __device__ float luminance(const owl::vec3f &c) {
-    return c.x * 0.212671f + c.y * 0.715160f + c.z * 0.072169f;
-}
+#define SPP 1
+#define MAX_DEPTH 16
 
 __inline__ __device__ owl::vec3f xfmPt(const affine3f_ &xform, const owl::vec3f &p) {
     return xform.vx * p.x + xform.vy * p.y + xform.vz * p.z + xform.p;
@@ -23,7 +20,7 @@ __inline__ __device__ owl::Ray generateRay(float u, float v, const owl::vec2f &l
     const DeviceCamera &camera = optixLaunchParams.camera;
     const owl::vec2f disk = camera.apertureRadius * randomInUnitDisk(lensSample);
     const owl::vec3f origin(disk.x, disk.y, 0.f);
-    const owl::vec3f direction(camera.sensorSize.x * (u / camera.resolution.x - 0.5f),
+    const owl::vec3f direction(camera.sensorSize.x * (0.5f - u / camera.resolution.x),
                                camera.sensorSize.y * (v / camera.resolution.y - 0.5f), camera.focalDist);
     const owl::vec3f tOrigin = xfmPt(camera.xform, origin);
     const owl::vec3f tDirection = xfmVec(camera.xform, direction - origin);
@@ -64,14 +61,14 @@ __inline__ __device__ void sampleLight(const owl::vec3f &p, const owl::vec3f &sa
     scatter.pdf = (dist2) / (lights.size * area * cos);
 }
 
-__inline__ __device__ float powerHeuristic(float pdf1, float pdf2) {
-    const float pow1 = pdf1 * pdf1;
-    const float pow2 = pdf2 * pdf2;
+__inline__ __device__ float powerHeuristic(float pdf1, float pdf2, float power) {
+    const float pow1 = powf(pdf1, power);
+    const float pow2 = powf(pdf2, power);
     return (pow1) / (pow1 + pow2);
 }
 
 /// Integrator
-__inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd) {
+__inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) {
     owl::vec3f result(0.f);
     owl::vec3f throughput(1.f);
     float misWeight = 1.f;
@@ -99,6 +96,13 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd) {
             MaterialResult mat;
             getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
 
+            // Cutout material
+            if (prd.random() < 1.f - mat.alpha) {
+                ray = owl::Ray(prd.hitInfo.p, ray.direction, 1e-3f, 1e10f);
+                traceRay(optixLaunchParams.world, ray, prd);
+                continue;
+            }
+
             // Create local shading frame
             onb = ONB(prd.hitInfo.sn);
             const owl::vec3f dirIn = -normalize(onb.toLocal(ray.direction));
@@ -117,12 +121,22 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd) {
                 if (pdfLight1 > 0.f) {
                     // Attempt to find emitted light
                     traceRay(optixLaunchParams.world, lightRay, lightPrd);
+                    Material& localMat = optixLaunchParams.mats[lightPrd.hitInfo.mat];
+                    owl::vec2f& uv = lightPrd.hitInfo.uv;
+                    float alpha;
+                    getTexResult1f(localMat.hasAlphaTex, localMat.alphaTex, uv.u, uv.v, alpha);
+                    if (alpha < 0.5f) {
+                        lightRay = owl::Ray(lightPrd.hitInfo.p, lightRay.direction, 1e-3f, 1e10f);
+                        traceRay(optixLaunchParams.world, lightRay, lightPrd);
+                    }
+
                     owl::vec3f emitLight = optixLaunchParams.mats[lightPrd.hitInfo.mat].emission;
+
                     // Check if occluded (hopefully triangles don't occlude themselves)
                     if (lightPrd.hitInfo.id != scatterRecord.primI) emitLight = 0.f;
                     float pdfLight2 = pdfMat(mat, dirIn, lightDirOut, half);
                     owl::vec3f evalLight = evalMat(mat, dirIn, lightDirOut, half);
-                    float misWeightLight = powerHeuristic(pdfLight1, pdfLight2);
+                    float misWeightLight = powerHeuristic(pdfLight1, pdfLight2, power);
                     result += throughput * misWeightLight * evalLight * emitLight / pdfLight1;
                 } else {
                     break;
@@ -133,7 +147,7 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd) {
             {
                 // First sample BRDF
                 owl::vec3f brdfDirOut;
-                owl::vec2f brdfSample = {prd.random(), prd.random()};
+                owl::vec3f brdfSample = {prd.random(), prd.random(), prd.random()};
                 if (!sampleMat(mat, dirIn, brdfSample, brdfDirOut)) {
                     break;
                 }
@@ -157,7 +171,7 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd) {
                     }
                     owl::vec3f evalBRDF = evalMat(mat, dirIn, brdfDirOut, half);
 
-                    misWeight = powerHeuristic(pdfBRDF1, pdfBRDF2);
+                    misWeight = powerHeuristic(pdfBRDF1, pdfBRDF2, power);
                     result += throughput * emit;
                     throughput *= evalBRDF / pdfBRDF1;
                 } else {
@@ -193,8 +207,13 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd) {
     return result;
 }
 
+__inline__ __device__ owl::vec3f LiDebug(owl::Ray& ray, Record &prd) {
+    traceRay(optixLaunchParams.world, ray, prd);
+    return (prd.hitInfo.sn + 1.f) * 0.5f;
+}
+
 /// Lights integrator
-__inline__ __device__ owl::vec3f LiLights(owl::Ray &ray, Record &prd) {
+__inline__ __device__ owl::vec3f LiDirect(owl::Ray &ray, Record &prd) {
     owl::vec3f result(0.f);
     owl::vec3f throughput(1.f);
     ONB onb({0.f, 0.f, 1.f});
@@ -203,7 +222,7 @@ __inline__ __device__ owl::vec3f LiLights(owl::Ray &ray, Record &prd) {
     int prevId = -1;
 
     prd.emitted = 0.f;
-    for (int depth = 0; depth <= MAX_DEPTH; ++depth) {
+    for (int depth = 0; depth <= 1; ++depth) {
         traceRay(optixLaunchParams.world, ray, prd);
         // Intersect
         if (prd.intersectEvent == RayScattered) {
@@ -213,7 +232,7 @@ __inline__ __device__ owl::vec3f LiLights(owl::Ray &ray, Record &prd) {
             if (prevId != -1 && prevId != prd.hitInfo.id) prd.emitted = 0.f;
 
             // Terminate if depth is reached
-            if (depth == MAX_DEPTH || luminance(prd.emitted) > 0.f) {
+            if (depth == 1 || luminance(prd.emitted) > 0.f) {
                 result += throughput * prd.emitted;
                 break;
             }
@@ -221,6 +240,13 @@ __inline__ __device__ owl::vec3f LiLights(owl::Ray &ray, Record &prd) {
             // Obtain material at point
             MaterialResult mat;
             getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
+
+            // Cutout material
+            if (prd.random() < 1.f - mat.alpha) {
+                ray = owl::Ray(prd.hitInfo.p, ray.direction, 1e-3f, 1e10f);
+                traceRay(optixLaunchParams.world, ray, prd);
+                continue;
+            }
 
             // Create local shading frame
             onb = ONB(prd.hitInfo.sn);
@@ -295,13 +321,19 @@ __inline__ __device__ owl::vec3f Li(owl::Ray &ray, Record &prd) {
             MaterialResult mat;
             getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
 
+            if (mat.alpha < 0.001f) {
+                ray = owl::Ray(prd.hitInfo.p, ray.direction, 1e-3f, 1e10f);
+                traceRay(optixLaunchParams.world, ray, prd);
+                continue;
+            }
+
             // Create local shading frame
             onb = ONB(prd.hitInfo.sn);
             const owl::vec3f dirIn = -normalize(onb.toLocal(ray.direction));
 
             // Sample brdf
             owl::vec3f brdfDirOut;
-            owl::vec2f brdfSample = {prd.random(), prd.random()};
+            owl::vec3f brdfSample = {prd.random(), prd.random(), prd.random()};
             if (!sampleMat(mat, dirIn, brdfSample, brdfDirOut)) {
                 break;
             }
@@ -356,7 +388,17 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
         const owl::vec2f uv = (owl::vec2f(pixelId) + pixelOffset);
         const owl::vec2f lensSample = {prd.random(), prd.random()};
         owl::Ray ray = generateRay(uv.x, uv.y, lensSample);
-        color += LiMIS(ray, prd);
+        if (optixLaunchParams.camera.integrator == 0) {
+            color += Li(ray, prd);
+        } else if (optixLaunchParams.camera.integrator == 1) {
+            color += LiDirect(ray, prd);
+        } else if (optixLaunchParams.camera.integrator == 2) {
+            color += LiMIS(ray, prd, 2.f);
+        } else if (optixLaunchParams.camera.integrator == 3) {
+            color += LiMIS(ray, prd, 1.f);
+        } else {
+            color += LiDebug(ray, prd);
+        }
     }
 
     // Reject invalid samples
@@ -383,6 +425,6 @@ OPTIX_MISS_PROGRAM(Miss)() {
     Record &prd = owl::getPRD<Record>();
 
     // For now, grey background
-    prd.emitted = owl::vec3f(0.00f);
+    prd.emitted = owl::vec3f(0.0f);
     prd.intersectEvent = RayMissed;
 }

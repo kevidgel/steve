@@ -5,16 +5,14 @@
 
 #pragma once
 
-#include "context.hpp"
-#include "pathtracer/render.hpp"
+#include "pathtracer/host/render.hpp"
 
 #include <GLFW/glfw3.h>
-#include <functional>
 #include <thread>
 
 class Display {
   public:
-    explicit Display(const Context &ctx);
+    explicit Display();
     ~Display();
 
     /// Attach renderer

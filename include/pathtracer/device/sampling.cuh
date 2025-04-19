@@ -1,6 +1,6 @@
 /**
 * @file sampling.cuh
-*
+* @brief Sampling routines
 */
 
 #pragma once

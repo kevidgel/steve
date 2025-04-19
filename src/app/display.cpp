@@ -8,7 +8,6 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-#include <ImGuizmo.h>
 #include <optional>
 #include <spdlog/spdlog.h>
 
@@ -38,13 +37,13 @@ std::optional<std::string> get_default_font() {
     return font_path;
 }
 
-Display::Display(const Context &ctx) : renderer(nullptr), running(false) {
+Display::Display() : renderer(nullptr), running(false) {
     if (!glfwInit()) {
         spdlog::error("GLFW init failed");
     }
 
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    window = glfwCreateWindow(ctx.width, ctx.height, "steve", nullptr, nullptr);
+    window = glfwCreateWindow(1920, 1080, "steve", nullptr, nullptr);
     if (!window) {
         spdlog::error("GLFW window creation failed");
         glfwTerminate();
@@ -133,6 +132,10 @@ void Display::processInputs() {
 void Display::start() {
     // Render loop
     running = true;
+    using clock = std::chrono::steady_clock;
+    constexpr auto FRAMETIME = std::chrono::duration<double, std::milli>(1000.0 / 60.0);
+
+    auto nextFrame = clock::now() + FRAMETIME;
     while (running && !glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
@@ -167,6 +170,9 @@ void Display::start() {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
+
+        // std::this_thread::sleep_until(nextFrame);
+        // nextFrame += FRAMETIME;
     }
 
     // Clean up

@@ -4,8 +4,9 @@
  */
 #pragma once
 
-#include "pathtracer/host_defs.hpp"
+#include "material_buffer.hpp"
 #include "owl/common/math/vec.h"
+#include "pathtracer/shared/material_defs.cuh"
 
 #include <filesystem>
 #include <vector>
@@ -30,7 +31,7 @@ class SceneBuffer {
     std::vector<uint> lightPrimsI;
 
     // Materials
-    std::vector<Material> mats;
+    MaterialBuffer materialBuffer;
 
     // Keep a copy of filename just in case
     const std::filesystem::path filename;

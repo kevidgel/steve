@@ -1,15 +1,11 @@
-#include "pathtracer/render.hpp"
+#include "pathtracer/host/render.hpp"
+#include "pathtracer/host/texture.hpp"
 #include "glm/glm.hpp"
-#include "glm/gtc/matrix_transform.hpp"
-#include "glm/gtc/type_ptr.hpp"
 #include "imgui.h"
 #include "ImGuizmo.h"
 #include "integrator.ptx.hpp"
-#include "pathtracer/host_defs.hpp"
-#include "pathtracer/texture.hpp"
 
 #include <cuda_gl_interop.h>
-#include <future>
 #include <spdlog/spdlog.h>
 
 namespace Screen {
@@ -91,9 +87,9 @@ unsigned int screen_indices[] = {
 
 void Render::logInfo(const std::string &log) { spdlog::info("Renderer: {}", log); }
 
-Render::Render(const Context &ctx, std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camera_,
+Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camera_,
                const std::filesystem::path &envFilename)
-    : ctx(ctx), camera(*camera_) {
+    : camera(*camera_) {
     // First initialize GL stuff
     gl.shader = new Shader(Screen::vertex_shader_source, Screen::fragment_shader_source);
 
@@ -217,7 +213,7 @@ Render::Render(const Context &ctx, std::unique_ptr<SceneBuffer> scene, std::uniq
 
     // Create materials buffer
     owl.matsBuffer =
-        owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Material), scene->mats.size(), scene->mats.data());
+        owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Material), scene->materialBuffer.mats.size(), scene->materialBuffer.mats.data());
 
     // Create lights buffers
     owl.lightsVertsBuffer =
@@ -240,6 +236,7 @@ Render::Render(const Context &ctx, std::unique_ptr<SceneBuffer> scene, std::uniq
         {"camera.resolution", OWL_INT2, OWL_OFFSETOF(LaunchParams, camera.resolution)},
         {"camera.focalDist", OWL_FLOAT, OWL_OFFSETOF(LaunchParams, camera.focalDist)},
         {"camera.apertureRadius", OWL_FLOAT, OWL_OFFSETOF(LaunchParams, camera.apertureRadius)},
+        {"camera.integrator", OWL_INT, OWL_OFFSETOF(LaunchParams, camera.integrator)},
         {"world", OWL_GROUP, OWL_OFFSETOF(LaunchParams, world)},
         {"mats", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, mats)},
         {"lights.verts", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, lights.verts)},
@@ -262,6 +259,7 @@ Render::Render(const Context &ctx, std::unique_ptr<SceneBuffer> scene, std::uniq
     owlParamsSet2i(owl.launchParams, "camera.resolution", camera.resolution.x, camera.resolution.y);
     owlParamsSet1f(owl.launchParams, "camera.focalDist", camera.focalDist);
     owlParamsSet1f(owl.launchParams, "camera.apertureRadius", camera.apertureRadius);
+    owlParamsSet1i(owl.launchParams, "camera.integrator", camera.integrator);
     owlParamsSetGroup(owl.launchParams, "world", owl.world);
     owlParamsSetBuffer(owl.launchParams, "mats", owl.matsBuffer);
     owlParamsSetBuffer(owl.launchParams, "lights.verts", owl.lightsVertsBuffer);
@@ -342,28 +340,28 @@ void Render::moveCamera(const CameraAction &action, float speed) {
         transform.p -= transform.l.vy * inc;
         break;
     case MoveRight:
-        transform.p += xfmVector(camera.yaw, transform.l.vx) * inc;
+        transform.p -= xfmVector(camera.xyaw(), transform.l.vx) * inc;
         break;
     case MoveLeft:
-        transform.p -= xfmVector(camera.yaw, transform.l.vx) * inc;
+        transform.p += xfmVector(camera.xyaw(), transform.l.vx) * inc;
         break;
     case MoveForward:
-        transform.p += xfmVector(camera.yaw, transform.l.vz) * inc;
+        transform.p += xfmVector(camera.xyaw(), transform.l.vz) * inc;
         break;
     case MoveBackward:
-        transform.p -= xfmVector(camera.yaw, transform.l.vz) * inc;
+        transform.p -= xfmVector(camera.xyaw(), transform.l.vz) * inc;
         break;
     case RotateLeft:
-        yaw -= 10 * inc;
+        camera.yaw += 10 * inc;
         break;
     case RotateRight:
-        yaw += 10 * inc;
+        camera.yaw -= 10 * inc;
         break;
     case RotateUp:
-        pitch -= 10 * inc;
+        camera.pitch -= 10 * inc;
         break;
     case RotateDown:
-        pitch += 10 * inc;
+        camera.pitch += 10 * inc;
         break;
     case FocalInc: {
         const float oldFocalDist = camera.focalDist;
@@ -404,6 +402,7 @@ void Render::update() {
     owlParamsSet2i(owl.launchParams, "camera.resolution", camera.resolution.x, camera.resolution.y);
     owlParamsSet1f(owl.launchParams, "camera.focalDist", camera.focalDist);
     owlParamsSet1f(owl.launchParams, "camera.apertureRadius", camera.apertureRadius);
+    owlParamsSet1i(owl.launchParams, "camera.integrator", camera.integrator);
 }
 
 /// Launch kernel and display results per frame
@@ -420,44 +419,14 @@ void Render::render() {
     ImGui::SetNextWindowSize(ImVec2(toolbarWidth, viewport->WorkPos.y + viewport->WorkSize.y - toolbarPos.y));
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
 
-    ImGui::Begin("Scene", nullptr, flags);
-    auto &transform = camera.transform;
-    ImGui::Text("Camera:");
-
-    {
-        float translation[3], rotation[3], scale[3];
-        float tmp[16] = {transform.l.vx.x, transform.l.vx.y, transform.l.vx.z, 0.f,
-                         transform.l.vy.x, transform.l.vy.y, transform.l.vy.z, 0.f,
-                         transform.l.vz.x, transform.l.vz.y, transform.l.vz.z, 0.f,
-                         transform.p.x,    transform.p.y,    transform.p.z,    0.f};
-        ImGuizmo::DecomposeMatrixToComponents(tmp, translation, rotation, scale);
-        ImGui::InputFloat3("Translation", translation);
-        ImGui::InputFloat3("Rotation", rotation);
-        ImGui::InputFloat3("Scale", scale);
-        ImGuizmo::RecomposeMatrixFromComponents(translation, rotation, scale, tmp);
-        const owl::vec3f vx = {tmp[0], tmp[1], tmp[2]};
-        const owl::vec3f vy = {tmp[4], tmp[5], tmp[6]};
-        const owl::vec3f vz = {tmp[8], tmp[9], tmp[10]};
-        const owl::vec3f p = {tmp[12], tmp[13], tmp[14]};
-        transform = owl::affine3f({vx, vy, vz}, p);
+    ImGui::Begin("Properties", nullptr, flags);
+    if (ImGui::CollapsingHeader("Render")) {
+        ImGui::Text("Total samples: %d", frame.accum);
+        ImGui::Checkbox("Enable frame accum." , &accumFrames);
     }
-
-    {
-        ImGui::InputFloat("Yaw", &yaw);
-        ImGui::InputFloat("Pitch", &pitch);
-        camera.yaw = owl::affine3f::rotate(camera.transform.l.vy, yaw * M_PIf / 180.f);
-        camera.pitch = owl::affine3f::rotate(camera.transform.l.vx, pitch * M_PIf / 180.f);
+    if (ImGui::CollapsingHeader("Camera")) {
+        camera.renderProperties();
     }
-
-    {
-        float tmp[2] = {camera.sensorSize.x, camera.sensorSize.y};
-        ImGui::InputFloat2("Sensor Size", tmp);
-        camera.sensorSize = {tmp[0], tmp[1]};
-    }
-
-    ImGui::InputFloat("Focal Dist.", &camera.focalDist);
-    ImGui::InputFloat("Apert. Radius", &camera.apertureRadius);
-    ImGui::Checkbox("Accum. Frames" , &accumFrames);
     ImGui::End();
 
     const ImVec2 renderPos = ImVec2(0, viewport->WorkPos.y);
