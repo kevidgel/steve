@@ -10,6 +10,7 @@
 #include "ray.cuh"
 #include "sampling.cuh"
 
+#include <bits/algorithmfwd.h>
 #include <cuda_runtime.h>
 
 #define INV_PI 0.31830988618379067154f
@@ -110,10 +111,25 @@ __inline__ __device__ void getMatResult(const Material &mat, Record &record, Mat
     getTexResult1f(mat.hasSpecularTex, mat.specularTex, uv.u, uv.v, matResult.specular);
     getTexResult1f(mat.hasRoughnessTex, mat.roughnessTex, uv.u, uv.v, matResult.roughness);
     getTexResult1f(mat.hasSheenTex, mat.sheenTex, uv.u, uv.v, matResult.sheen);
-    owl::vec3f baseColor;
-    getTexResult3f(mat.hasBaseColorTex, mat.baseColorTex, uv.u, uv.v, matResult.baseColor);
+    owl::vec4f baseColorWithAlpha;
+    getTexResult4f(mat.hasBaseColorTex, mat.baseColorTex, uv.u, uv.v,  baseColorWithAlpha);
+    if (mat.hasBaseColorTex) {
+        matResult.baseColor = {baseColorWithAlpha.x , baseColorWithAlpha.y, baseColorWithAlpha.z};
+        matResult.alpha = baseColorWithAlpha.w;
+    }
     getTexResult3f(mat.hasEmissiveTex, mat.emissiveTex, uv.u, uv.v, matResult.emission);
     getTexResult1f(mat.hasAlphaTex, mat.alphaTex, uv.u, uv.v, matResult.alpha);
+    if (mat.hasEmissiveTex) {
+        owl::vec3f emit;
+        getTexResult3f(mat.hasEmissiveTex, mat.emissiveTex, uv.u, uv.v, emit);
+        matResult.emission *= emit;
+    }
+    if (mat.hasMetallicRoughnessTex) {
+        owl::vec3f metallicRoughness;
+        getTexResult3f(mat.hasMetallicRoughnessTex, mat.metallicRoughnessTex, uv.u, uv.v, metallicRoughness);
+        matResult.roughness *= metallicRoughness.y;
+        matResult.metallic *= metallicRoughness.z;
+    }
 
     // Bump mapping
     if (mat.hasBumpTex) {
@@ -134,11 +150,21 @@ __inline__ __device__ void getMatResult(const Material &mat, Record &record, Mat
         record.hitInfo.sn = normalize(onb.toWorld(bn));
     }
 
+    matResult.clearcoatGloss = owl::clamp(matResult.clearcoatGloss, 0.f, 1.f);
+    matResult.clearcoat = owl::clamp(matResult.clearcoat, 0.f, 1.f);
+    matResult.sheen = owl::clamp(matResult.sheen, 0.f, 1.f);
+    matResult.sheenTint = owl::clamp(matResult.sheenTint, 0.f, 1.f);
+    matResult.specular = owl::clamp(matResult.specular, 0.f, 1.f);
+    matResult.metallic = owl::clamp(matResult.metallic, 0.f, 1.f);
+    matResult.roughness = owl::clamp(matResult.roughness, 0.f, 1.f);
+    matResult.baseColor = clamp(matResult.baseColor, {0.f}, {1.f});
+
     // Sampling weights
     matResult.diffuseWeight = (1.f - mat.specular) * (1.f - mat.metallic);
     matResult.metalWeight = 1.f - mat.specular * (1.f - mat.metallic);
     matResult.clearcoatWeight = 0.25f * mat.clearcoat;
     matResult.sumWeights = matResult.diffuseWeight + matResult.metalWeight + matResult.clearcoatWeight;
+
 }
 
 /// Lambertian material
@@ -366,6 +392,7 @@ __inline__ __device__ bool sampleMat(const MaterialResult &mat, const owl::vec3f
     } else {
         return sampleClearcoat(mat, dirIn, {sample.x, sample.y}, dirOut);
     }
+    // return sampleDiffuse(mat, dirIn, {sample.x, sample.y}, dirOut);
 };
 
 __inline__ __device__ float pdfMat(const MaterialResult &mat, const owl::vec3f &dirIn, const owl::vec3f &dirOut,
@@ -375,7 +402,7 @@ __inline__ __device__ float pdfMat(const MaterialResult &mat, const owl::vec3f &
     pdf += pdfMetal(mat, dirIn, dirOut, half) * mat.metalWeight;
     pdf += pdfClearcoat(mat, dirIn, dirOut, half) * mat.clearcoatWeight;
     return pdf / mat.sumWeights;
-    // return pdfClearcoat(mat, dirIn, dirOut, half);
+    // return pdfDiffuse(mat, dirIn, dirOut, half);
 }
 
 __inline__ __device__ owl::vec3f evalMat(const MaterialResult &mat, const owl::vec3f &dirIn,
@@ -387,6 +414,6 @@ __inline__ __device__ owl::vec3f evalMat(const MaterialResult &mat, const owl::v
     const owl::vec3f sheen = (1.f - mat.metallic) * mat.sheen * evalSheen(mat, dirIn, dirOut, half);
     const owl::vec3f metal = mat.metalWeight * evalMetal(mat, dirIn, dirOut, half);
     const owl::vec3f clearcoat = mat.clearcoatWeight * evalClearcoat(mat, dirIn, dirOut, half);
-    return diffuse + metal + sheen + clearcoat;
-    // return mat.diffuseWeight * evalDiffuse(mat, dirIn, dirOut, half);
+    return (diffuse + metal + sheen + clearcoat) / mat.sumWeights;
+    // return evalDiffuse(mat, dirIn, dirOut, half);
 }

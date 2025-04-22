@@ -1,5 +1,4 @@
-#include "../../include/pathtracer/host/texture.hpp"
-#define STB_IMAGE_IMPLEMENTATION
+#include "pathtracer/host/texture.hpp"
 #include "owl/Object.h"
 #include "owl/common/math/vec.h"
 #include "owl/owl.h"

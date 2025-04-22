@@ -1,9 +1,13 @@
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
 #include "pathtracer/host/render.hpp"
-#include "pathtracer/host/texture.hpp"
+#include "ImGuizmo.h"
 #include "glm/glm.hpp"
 #include "imgui.h"
-#include "ImGuizmo.h"
 #include "integrator.ptx.hpp"
+#include "pathtracer/host/texture.hpp"
 
 #include <cuda_gl_interop.h>
 #include <spdlog/spdlog.h>
@@ -212,8 +216,8 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owl.envMap = loadImageOwl(envFilename, owl.ctx);
 
     // Create materials buffer
-    owl.matsBuffer =
-        owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Material), scene->materialBuffer.mats.size(), scene->materialBuffer.mats.data());
+    owl.matsBuffer = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Material), scene->materialBuffer.mats.size(),
+                                           scene->materialBuffer.mats.data());
 
     // Create lights buffers
     owl.lightsVertsBuffer =
@@ -297,6 +301,8 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owlBuildSBT(owl.ctx);
 
     cudaGraphicsUnmapResources(1, &pbo, nullptr);
+
+    materialBuffer = scene->materialBuffer;
 }
 
 Render::~Render() {
@@ -386,6 +392,12 @@ void Render::moveCamera(const CameraAction &action, float speed) {
 
 /// Update state
 void Render::update() {
+    if (materialBuffer.dirty) {
+        owlBufferUpload(owl.matsBuffer, materialBuffer.mats.data(), 0, materialBuffer.mats.size());
+        frame.dirty = true;
+        materialBuffer.dirty = false;
+    }
+
     frame.accum = frame.dirty ? 1 : frame.accum + 1;
     frame.id++;
 
@@ -393,16 +405,19 @@ void Render::update() {
     owlParamsSet1i(owl.launchParams, "frame.id", frame.id);
     owlParamsSet1i(owl.launchParams, "frame.accum", frame.accum);
 
-    const owl::affine3f xform = camera.xform();
-    owlParamsSet3f(owl.launchParams, "camera.xform.p", xform.p.x, xform.p.y, xform.p.z);
-    owlParamsSet3f(owl.launchParams, "camera.xform.vx", xform.l.vx.x, xform.l.vx.y, xform.l.vx.z);
-    owlParamsSet3f(owl.launchParams, "camera.xform.vy", xform.l.vy.x, xform.l.vy.y, xform.l.vy.z);
-    owlParamsSet3f(owl.launchParams, "camera.xform.vz", xform.l.vz.x, xform.l.vz.y, xform.l.vz.z);
-    owlParamsSet2f(owl.launchParams, "camera.sensorSize", camera.sensorSize.x, camera.sensorSize.y);
-    owlParamsSet2i(owl.launchParams, "camera.resolution", camera.resolution.x, camera.resolution.y);
-    owlParamsSet1f(owl.launchParams, "camera.focalDist", camera.focalDist);
-    owlParamsSet1f(owl.launchParams, "camera.apertureRadius", camera.apertureRadius);
-    owlParamsSet1i(owl.launchParams, "camera.integrator", camera.integrator);
+    if (frame.dirty) {
+        const owl::affine3f xform = camera.xform();
+        owlParamsSet3f(owl.launchParams, "camera.xform.p", xform.p.x, xform.p.y, xform.p.z);
+        owlParamsSet3f(owl.launchParams, "camera.xform.vx", xform.l.vx.x, xform.l.vx.y, xform.l.vx.z);
+        owlParamsSet3f(owl.launchParams, "camera.xform.vy", xform.l.vy.x, xform.l.vy.y, xform.l.vy.z);
+        owlParamsSet3f(owl.launchParams, "camera.xform.vz", xform.l.vz.x, xform.l.vz.y, xform.l.vz.z);
+        owlParamsSet2f(owl.launchParams, "camera.sensorSize", camera.sensorSize.x, camera.sensorSize.y);
+        owlParamsSet2i(owl.launchParams, "camera.resolution", camera.resolution.x, camera.resolution.y);
+        owlParamsSet1f(owl.launchParams, "camera.focalDist", camera.focalDist);
+        owlParamsSet1f(owl.launchParams, "camera.apertureRadius", camera.apertureRadius);
+        owlParamsSet1i(owl.launchParams, "camera.integrator", camera.integrator);
+    }
+
 }
 
 /// Launch kernel and display results per frame
@@ -422,10 +437,13 @@ void Render::render() {
     ImGui::Begin("Properties", nullptr, flags);
     if (ImGui::CollapsingHeader("Render")) {
         ImGui::Text("Total samples: %d", frame.accum);
-        ImGui::Checkbox("Enable frame accum." , &accumFrames);
+        ImGui::Checkbox("Enable frame accum.", &accumFrames);
     }
     if (ImGui::CollapsingHeader("Camera")) {
         camera.renderProperties();
+    }
+    if (ImGui::CollapsingHeader("Materials")) {
+        materialBuffer.renderProperties();
     }
     ImGui::End();
 

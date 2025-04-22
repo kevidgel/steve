@@ -30,7 +30,8 @@ struct Camera {
     void renderProperties() {
         {
             static int current = 0;
-            const char* integrators[] = {"BRDF", "Direct Lighting", "BRDF + NEE with MIS (power)", "BRDF + NEE with MIS (balance)", "Debug"};
+            const char *integrators[] = {"BRDF", "Direct Lighting", "BRDF + NEE with MIS (power)",
+                                         "BRDF + NEE with MIS (balance)", "Debug"};
             constexpr int count = IM_ARRAYSIZE(integrators);
             if (ImGui::Combo("Integrator", &current, integrators, count)) {
                 integrator = current;

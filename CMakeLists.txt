@@ -22,8 +22,11 @@ find_package(TBB CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
 
+set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
+set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(ext/owl EXCLUDE_FROM_ALL)
 add_subdirectory(ext/rapidobj)
+add_subdirectory(ext/tinygltf)
 
 # Trace PTX compilation
 enable_language(CUDA)
@@ -131,6 +134,7 @@ target_include_directories(steve_lib PUBLIC
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/ext/owl/owl/include
         ${CMAKE_SOURCE_DIR}/ext/rapidobj/include
+        ${CMAKE_SOURCE_DIR}/ext/tinygltf/
         ${CMAKE_CURRENT_BINARY_DIR}/generated
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
         ${OptiX_ROOT_DIR}/include
@@ -149,6 +153,7 @@ target_link_libraries(steve_lib PRIVATE
         glm::glm
         owl::owl
         rapidobj::rapidobj
+        tinygltf
         nlohmann_json::nlohmann_json
         imguizmo::imguizmo
 )

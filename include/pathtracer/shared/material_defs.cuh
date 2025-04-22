@@ -5,8 +5,8 @@
 
 #pragma once
 
-#include "owl/common/math/vec.h"
 #include "cuda_runtime.h"
+#include "owl/common/math/vec.h"
 
 __inline__ __host__ __device__ float luminance(const owl::vec3f &c) {
     return c.x * 0.212671f + c.y * 0.715160f + c.z * 0.072169f;
@@ -28,6 +28,7 @@ struct Material {
     bool hasAlphaTex;
     bool hasBumpTex;
     bool hasNormalTex;
+    bool hasMetallicRoughnessTex;
 
     cudaTextureObject_t metallicTex;
     // no subsurfaceTex
@@ -44,6 +45,7 @@ struct Material {
     cudaTextureObject_t alphaTex;
     cudaTextureObject_t bumpTex;
     cudaTextureObject_t normalTex;
+    cudaTextureObject_t metallicRoughnessTex;
 
     float metallic;
     float subsurface;
@@ -57,4 +59,15 @@ struct Material {
     float clearcoatGloss;
     owl::vec3f baseColor;
     owl::vec3f emission;
+
+    bool operator==(Material const &o) const {
+        return std::tie(hasMetallicTex, hasSpecularTex, hasRoughnessTex, hasSheenTex, hasBaseColorTex,
+                        hasEmissiveTex, hasAlphaTex, hasBumpTex, hasNormalTex, hasMetallicRoughnessTex, metallic,
+                        subsurface, specular, roughness, specularTint, anisotropic, sheen, sheenTint, clearcoat,
+                        clearcoatGloss, baseColor, emission) ==
+               std::tie(o.hasMetallicTex, o.hasSpecularTex, o.hasRoughnessTex, o.hasSheenTex, o.hasBaseColorTex,
+                        o.hasEmissiveTex, o.hasAlphaTex, o.hasBumpTex, o.hasNormalTex, o.hasMetallicRoughnessTex,
+                        o.metallic, o.subsurface, o.specular, o.roughness, o.specularTint, o.anisotropic, o.sheen,
+                        o.sheenTint, o.clearcoat, o.clearcoatGloss, o.baseColor, o.emission);
+    }
 };

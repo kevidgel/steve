@@ -4,3 +4,6 @@
 [submodule "ext/rapidobj"]
 	path = ext/rapidobj
 	url = https://github.com/guybrush77/rapidobj
+[submodule "ext/tinygltf"]
+	path = ext/tinygltf
+	url = https://github.com/syoyo/tinygltf.git

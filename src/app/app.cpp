@@ -14,7 +14,6 @@ int main(int argc, char* argv[]) {
         spdlog::info("Parsing scene...");
         Result result = parseFile("/home/kevidgel/cmu/15468/final-project/models/test.json");
 
-
         spdlog::info("Setting up viewport...");
         Display display;
 

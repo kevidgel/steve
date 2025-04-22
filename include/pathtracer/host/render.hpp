@@ -81,6 +81,7 @@ class Render {
     Frame frame{};
     Camera camera{};
     Camera oldCamera{};
+    MaterialBuffer materialBuffer{};
     bool accumFrames = false;
 
     cudaGraphicsResource *pbo = nullptr;

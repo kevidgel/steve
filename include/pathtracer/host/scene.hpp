@@ -6,7 +6,6 @@
 
 #include "material_buffer.hpp"
 #include "owl/common/math/vec.h"
-#include "pathtracer/shared/material_defs.cuh"
 
 #include <filesystem>
 #include <vector>
@@ -14,7 +13,7 @@
 /// A little redundant with RapidObj's Result object, but abstracts away some code
 class SceneBuffer {
   public:
-    explicit SceneBuffer(const std::filesystem::path& filename);
+    explicit SceneBuffer(const std::filesystem::path &filename);
 
     // Attributes
     std::vector<owl::vec3f> verts;
@@ -35,5 +34,8 @@ class SceneBuffer {
 
     // Keep a copy of filename just in case
     const std::filesystem::path filename;
-};
 
+  private:
+    void loadObj(const std::filesystem::path &filename);
+    void loadGltf(const std::filesystem::path &filename, bool isBinary);
+};

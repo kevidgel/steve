@@ -83,18 +83,18 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) 
         // Intersect
         if (prd.intersectEvent == RayScattered) {
 
+            // Obtain material at point
+            MaterialResult mat;
+            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
+
             // First check if material is emissive
-            owl::vec3f emit = misWeight * optixLaunchParams.mats[prd.hitInfo.mat].emission;
+            owl::vec3f emit = misWeight * mat.emission;
 
             // Terminate if depth is reached
             if (depth == MAX_DEPTH || luminance(emit) > 0.01f) {
                 result += throughput * emit;
                 break;
             }
-
-            // Obtain material at point
-            MaterialResult mat;
-            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
 
             // Cutout material
             if (prd.random() < 1.f - mat.alpha) {
@@ -209,7 +209,13 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) 
 
 __inline__ __device__ owl::vec3f LiDebug(owl::Ray& ray, Record &prd) {
     traceRay(optixLaunchParams.world, ray, prd);
-    return (prd.hitInfo.sn + 1.f) * 0.5f;
+    // Obtain material at point
+    if (prd.intersectEvent == RayScattered) {
+        MaterialResult mat;
+        getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
+        return mat.emission;
+    }
+    return {0.f, 0.f, 0.f};
 }
 
 /// Lights integrator
@@ -308,8 +314,12 @@ __inline__ __device__ owl::vec3f Li(owl::Ray &ray, Record &prd) {
         // Intersect
         if (prd.intersectEvent == RayScattered) {
 
+            // Obtain material at point
+            MaterialResult mat;
+            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
+
             // First check if material is emissive
-            owl::vec3f emit = optixLaunchParams.mats[prd.hitInfo.mat].emission;
+            owl::vec3f emit = mat.emission;
 
             // Terminate if depth is reached
             if (depth == MAX_DEPTH || luminance(emit) > 0.01f) {
@@ -317,11 +327,8 @@ __inline__ __device__ owl::vec3f Li(owl::Ray &ray, Record &prd) {
                 break;
             }
 
-            // Obtain material at point
-            MaterialResult mat;
-            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, mat);
-
-            if (mat.alpha < 0.001f) {
+            // Cutout material
+            if (prd.random() < 1.f - mat.alpha) {
                 ray = owl::Ray(prd.hitInfo.p, ray.direction, 1e-3f, 1e10f);
                 traceRay(optixLaunchParams.world, ray, prd);
                 continue;
@@ -424,7 +431,9 @@ OPTIX_MISS_PROGRAM(Miss)() {
     // const MissProgData &self = owl::getProgramData<MissProgData>();
     Record &prd = owl::getPRD<Record>();
 
+    // owl::vec3f dir = optixGetWorldRayDirection();
+
     // For now, grey background
-    prd.emitted = owl::vec3f(0.0f);
+    prd.emitted = 0.1f;
     prd.intersectEvent = RayMissed;
 }
