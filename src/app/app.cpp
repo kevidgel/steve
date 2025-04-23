@@ -10,9 +10,16 @@
 #include <spdlog/spdlog.h>
 
 int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        spdlog::error("Error parsing program arguments");
+        return EXIT_FAILURE;
+    }
+
+    std::string filename = argv[1];
+
     try {
         spdlog::info("Parsing scene...");
-        Result result = parseFile("/home/kevidgel/cmu/15468/final-project/models/test.json");
+        Result result = parseFile(filename);
 
         spdlog::info("Setting up viewport...");
         Display display;
@@ -24,5 +31,8 @@ int main(int argc, char* argv[]) {
         display.start();
     } catch (const std::exception& e) {
         spdlog::error("{}", e.what());
+        return EXIT_FAILURE;
     }
+
+    return EXIT_SUCCESS;
 }

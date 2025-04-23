@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include "owl/common/math/vec.h"
+
 struct Lights {
     owl::vec3f *verts;
     owl::vec3ui *vertsI;

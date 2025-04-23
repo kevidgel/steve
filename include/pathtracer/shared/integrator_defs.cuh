@@ -5,10 +5,11 @@
 
 #pragma once
 
-#include "material_defs.cuh"
 #include "geometry_defs.cuh"
-#include "owl/owl.h"
+#include "material_defs.cuh"
 #include "owl/common/math/vec.h"
+#include "owl/owl.h"
+#include "reservoir_defs.cuh"
 
 #include <cuda_runtime.h>
 
@@ -45,6 +46,10 @@ struct LaunchParams {
 struct RayGenData {
     owl::vec4f *pboPtr;
     owl::vec2i pboSize;
+
+    // Same sizes as pbo
+    Reservoir *temporalReservoir;
+    Reservoir *spatialReservoir;
 };
 
 struct MissProgData {

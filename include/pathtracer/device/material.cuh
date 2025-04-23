@@ -53,10 +53,11 @@ struct MaterialResult {
     float sheenTint;
     float clearcoat;
     float clearcoatGloss;
-    float ior;
+    float etaInOverOut;
     float alpha;
 
     float diffuseWeight;
+    float sheenWeight;
     float clearcoatWeight;
     float metalWeight;
     float sumWeights;
@@ -64,6 +65,25 @@ struct MaterialResult {
 
 __inline__ __device__ owl::vec3f reflect(const owl::vec3f &v, const owl::vec3f &n) {
     return (2 * dot(v, n) * n) - v;
+}
+
+/// Returns false if TIR. eta is ior(dirIn) / ior(dirOut)
+__inline__ __device__ bool refract(const owl::vec3f &dirIn, const owl::vec3f &n, const float etaInOverOut,
+                                   owl::vec3f &dirOut) {
+    float cosThetaIn = dot(dirIn, n);
+    float sinThetaIn = sqrtf(1.f - cosThetaIn * cosThetaIn);
+    float sinThetaOut = sinThetaIn * etaInOverOut;
+    if (sinThetaOut > 1.f) {
+        dirOut = reflect(dirIn, n);
+        return false;
+    }
+    float cosThetaOut = sqrtf(1.f - sinThetaOut * sinThetaOut);
+    dirOut = normalize(etaInOverOut * (-dirIn + cosThetaIn * n) - cosThetaOut * n);
+    return true;
+}
+
+__inline__ __device__ float R0(float ior) {
+    return (ior - 1.f) * (ior - 1.f) / ((ior + 1.f) *  (ior + 1.f));
 }
 
 __inline__ __device__ void getTexResult1f(const bool hasTex, const cudaTextureObject_t &tex, const float u,
@@ -91,7 +111,7 @@ __inline__ __device__ void getTexResult4f(const bool hasTex, const cudaTextureOb
 }
 
 /// Evaluate texture sampling
-__inline__ __device__ void getMatResult(const Material &mat, Record &record, MaterialResult &matResult) {
+__inline__ __device__ void getMatResult(const Material &mat, Record &record, owl::Ray& ray, MaterialResult &matResult) {
     matResult.metallic = mat.metallic;
     matResult.subsurface = mat.subsurface;
     matResult.specular = mat.specular;
@@ -105,6 +125,7 @@ __inline__ __device__ void getMatResult(const Material &mat, Record &record, Mat
     matResult.baseColor = mat.baseColor;
     matResult.emission = mat.emission;
     matResult.alpha = 1.f;
+    matResult.etaInOverOut = dot(ray.direction, record.hitInfo.gn) < 0.f ? 1.0f / mat.ior : mat.ior;
 
     const owl::vec2f &uv = record.hitInfo.uv;
     getTexResult1f(mat.hasMetallicTex, mat.metallicTex, uv.u, uv.v, matResult.metallic);
@@ -112,9 +133,9 @@ __inline__ __device__ void getMatResult(const Material &mat, Record &record, Mat
     getTexResult1f(mat.hasRoughnessTex, mat.roughnessTex, uv.u, uv.v, matResult.roughness);
     getTexResult1f(mat.hasSheenTex, mat.sheenTex, uv.u, uv.v, matResult.sheen);
     owl::vec4f baseColorWithAlpha;
-    getTexResult4f(mat.hasBaseColorTex, mat.baseColorTex, uv.u, uv.v,  baseColorWithAlpha);
+    getTexResult4f(mat.hasBaseColorTex, mat.baseColorTex, uv.u, uv.v, baseColorWithAlpha);
     if (mat.hasBaseColorTex) {
-        matResult.baseColor = {baseColorWithAlpha.x , baseColorWithAlpha.y, baseColorWithAlpha.z};
+        matResult.baseColor = {baseColorWithAlpha.x, baseColorWithAlpha.y, baseColorWithAlpha.z};
         matResult.alpha = baseColorWithAlpha.w;
     }
     getTexResult3f(mat.hasEmissiveTex, mat.emissiveTex, uv.u, uv.v, matResult.emission);
@@ -163,8 +184,12 @@ __inline__ __device__ void getMatResult(const Material &mat, Record &record, Mat
     matResult.diffuseWeight = (1.f - mat.specular) * (1.f - mat.metallic);
     matResult.metalWeight = 1.f - mat.specular * (1.f - mat.metallic);
     matResult.clearcoatWeight = 0.25f * mat.clearcoat;
-    matResult.sumWeights = matResult.diffuseWeight + matResult.metalWeight + matResult.clearcoatWeight;
-
+    matResult.sheenWeight = (1.f - mat.metallic)  * mat.sheen;
+    matResult.sumWeights = matResult.diffuseWeight + matResult.metalWeight + matResult.clearcoatWeight + matResult.sheenWeight;
+    matResult.diffuseWeight /= matResult.sumWeights;
+    matResult.metalWeight /= matResult.sumWeights;
+    matResult.clearcoatWeight /= matResult.sumWeights;
+    matResult.sheenWeight /= matResult.sumWeights;
 }
 
 /// Lambertian material
@@ -229,9 +254,9 @@ __inline__ __device__ owl::vec3f evalDiffuse(const MaterialResult &mat, const ow
 }
 
 /// Disney's specular BRDF (Metal)
-__inline__ __device__ owl::vec3f fresnelGGX(const MaterialResult &mat, const owl::vec3f &half,
-                                            const owl::vec3f &dirOut) {
-    return mat.baseColor + (1.f - mat.baseColor) * powf(1 - abs(dot(half, dirOut)), 5);
+__inline__ __device__ owl::vec3f fresnelMetal(const owl::vec3f &color, const owl::vec3f &half,
+                                              const owl::vec3f &dirOut) {
+    return color + (1.f - color) * powf(1 - abs(dot(half, dirOut)), 5);
 }
 
 __inline__ __device__ float distribGGX(const MaterialResult &mat, const owl::vec3f &half) {
@@ -243,7 +268,7 @@ __inline__ __device__ float distribGGX(const MaterialResult &mat, const owl::vec
     return 1.f / invD;
 }
 
-__inline__ __device__ float g1GGX(const MaterialResult &mat, const owl::vec3f &dir) {
+__inline__ __device__ float g1SmithMaskingShadowing(const MaterialResult &mat, const owl::vec3f &dir) {
     const float aspect = sqrtf(1 - 0.9 * mat.anisotropic);
     const float aX = fmaxf(0.0001, mat.roughness * mat.roughness / aspect);
     const float aY = fmaxf(0.0001, mat.roughness * mat.roughness * aspect);
@@ -252,9 +277,8 @@ __inline__ __device__ float g1GGX(const MaterialResult &mat, const owl::vec3f &d
     return 1.f / (1.f + Lambda);
 }
 
-// VNDF normal sampling
-__inline__ __device__ bool sampleMetal(const MaterialResult &mat, const owl::vec3f &dirIn,
-                                       const owl::vec2f &sample, owl::vec3f &dirOut) {
+__inline__ __device__ owl::vec3f sampleVNDF(const MaterialResult &mat, const owl::vec3f &dirIn,
+                                            const owl::vec2f &sample) {
     const float aspect = sqrtf(1 - 0.9 * mat.anisotropic);
     const float aX = fmaxf(0.0001f, mat.roughness * mat.roughness / aspect);
     const float aY = fmaxf(0.0001f, mat.roughness * mat.roughness * aspect);
@@ -276,8 +300,18 @@ __inline__ __device__ bool sampleMetal(const MaterialResult &mat, const owl::vec
     const owl::vec3f normH = t1 * T1 + t2 * T2 + sqrtf(fmaxf(0.0, 1.0 - t1 * t1 - t2 * t2)) * dirInH;
     const owl::vec3f norm = normalize(owl::vec3f(aX * normH.x, aY * normH.y, fmaxf(0.f, normH.z)));
 
+    return norm;
+}
+
+// VNDF normal sampling
+__inline__ __device__ bool sampleMetal(const MaterialResult &mat, const owl::vec3f &dirIn,
+                                       const owl::vec2f &sample, owl::vec3f &dirOut) {
+    owl::vec3f sampledNormal = sampleVNDF(mat, dirIn, sample);
+
     // Reflect
-    dirOut = normalize(reflect(dirIn, norm));
+    dirOut = normalize(reflect(dirIn, sampledNormal));
+
+    // Reject tail samples of GGX
     return (dirOut.z > 0.f);
 };
 
@@ -286,15 +320,19 @@ __inline__ __device__ float pdfMetal(const MaterialResult &mat, const owl::vec3f
     if (dirIn.z <= 0.f || dirOut.z <= 0.f) {
         return 0.f;
     }
-    const float g1 = g1GGX(mat, dirIn);
+    const float g1 = g1SmithMaskingShadowing(mat, dirIn);
     const float distrib = distribGGX(mat, half);
     return g1 * distrib / (4.f * dirIn.z);
 }
 
 __inline__ __device__ owl::vec3f evalMetal(const MaterialResult &mat, const owl::vec3f &dirIn,
                                            const owl::vec3f &dirOut, const owl::vec3f &half) {
-    const owl::vec3f fresnel = fresnelGGX(mat, half, dirOut);
-    const float geom = g1GGX(mat, dirIn) * g1GGX(mat, dirOut);
+    const float lum = luminance(mat.baseColor);
+    const owl::vec3f cTint = lum > 0 ? mat.baseColor / lum : 1.f;
+    const owl::vec3f kS = (1.f - mat.specularTint) + mat.specularTint * cTint;
+    const owl::vec3f c0 = mat.specular * R0(mat.etaInOverOut) * (1.f - mat.metallic) * kS + mat.metallic * mat.baseColor;
+    const owl::vec3f fresnel = fresnelMetal(c0, half, dirOut);
+    const float geom = g1SmithMaskingShadowing(mat, dirIn) * g1SmithMaskingShadowing(mat, dirOut);
     const float distrib = distribGGX(mat, half);
     return (fresnel * distrib * geom) / (4.f * dirIn.z);
 }
@@ -348,19 +386,66 @@ __inline__ __device__ owl::vec3f evalClearcoat(const MaterialResult &mat, const 
     return (fresnel * distrib * geom) / (4.f * dirIn.z);
 }
 
-__inline__ __device__ bool sampleGlass(const MaterialResult &mat, const owl::vec3f &dirIn,
-                                       const owl::vec2f &sample, owl::vec3f &dirOut) {
-    return false;
-};
-
-__inline__ __device__ float pdfGlass(const MaterialResult &mat, const owl::vec3f &dirIn, const owl::vec3f &dirOut,
-                                     const owl::vec3f &half) {
-    return 0.f;
+__inline__ __device__ float fresnelGlass(const MaterialResult &mat, const owl::vec3f &dirIn,
+                                         const owl::vec3f &dirOut, const owl::vec3f &half) {
+    float rPara = dot(half, dirIn) - mat.etaInOverOut * dot(half, dirOut);
+    rPara /= dot(half, dirIn) + mat.etaInOverOut * dot(half, dirOut);
+    float rPerp = mat.etaInOverOut * dot(half, dirIn) - dot(half, dirOut);
+    rPerp /= mat.etaInOverOut * dot(half, dirIn) + dot(half, dirOut);
+    return 0.5f * (rPara * rPara + rPerp * rPerp);
 }
 
+/// Assume dirIn in (+) hemisphere
+__inline__ __device__ bool sampleGlass(const MaterialResult &mat, const owl::vec3f &dirIn,
+                                       const owl::vec3f &sample, owl::vec3f &dirOut) {
+    // Sample microfacet normal (GGX in this case)
+    owl::vec3f sampledNormal = sampleVNDF(mat, dirIn, {sample.x, sample.y});
+
+    bool TIR = !refract(dirIn, sampledNormal, mat.etaInOverOut, dirOut);
+    float F = TIR ? 1.0f : fresnelGlass(mat, dirIn, dirOut, sampledNormal);
+    // Reflect with probability F
+    if (sample.z < F) {
+        dirOut = reflect(dirIn, sampledNormal);
+    }
+    return true;
+};
+
+/// Assume dirIn in (+) hemisphere
+__inline__ __device__ float pdfGlass(const MaterialResult &mat, const owl::vec3f &dirIn, const owl::vec3f &dirOut,
+                                     const owl::vec3f &half, bool reflect) {
+    float F = fresnelGlass(mat, dirIn, dirOut, half);
+    float D = distribGGX(mat, half);
+    float g1 = g1SmithMaskingShadowing(mat, dirIn);
+    if (reflect) {
+        return (F * D * g1) / (4.f * dirIn.z);
+    } else {
+        float cosHO = dot(half, dirOut);
+        float cosHI = dot(half, dirIn);
+        float sqrtDen = cosHI + mat.etaInOverOut * cosHO;
+        float dHdO = mat.etaInOverOut * mat.etaInOverOut * cosHO / (sqrtDen * sqrtDen);
+        return (1.f - F) * D * g1 * fabsf(dHdO * cosHI / dirIn.z);
+    }
+}
+
+/// Assume dirIn in (+) hemisphere
 __inline__ __device__ owl::vec3f evalGlass(const MaterialResult &mat, const owl::vec3f &dirIn,
-                                           const owl::vec3f &dirOut, const owl::vec3f &half) {
-    return 0.f;
+                                           const owl::vec3f &dirOut, const owl::vec3f &half, bool reflect) {
+    float F = fresnelGlass(mat, dirIn, dirOut, half);
+    float D = distribGGX(mat, half);                                                      // Same as metal
+    float G = g1SmithMaskingShadowing(mat, dirIn) * g1SmithMaskingShadowing(mat, dirOut); // Same as metal
+    if (reflect) {
+        // Reflection
+        return (mat.baseColor * F * D * G) / (4.f * fabsf(dirIn.z));
+    } else {
+        // Transmission
+        float cosHO = dot(half, dirOut);
+        float cosHI = dot(half, dirIn);
+        float sqrtDen = cosHI + mat.etaInOverOut * cosHO;
+
+        owl::vec3f eval = sqrt(mat.baseColor) * (1.f - F) * D * G * fabsf(cosHO * cosHI);
+        eval /= dirIn.z * (sqrtDen * sqrtDen);
+        return eval;
+    }
 }
 
 __inline__ __device__ bool sampleSheen(const MaterialResult &mat, const owl::vec3f &dirIn,
@@ -385,35 +470,41 @@ __inline__ __device__ owl::vec3f evalSheen(const MaterialResult &mat, const owl:
 /// Full material sampling in local space
 __inline__ __device__ bool sampleMat(const MaterialResult &mat, const owl::vec3f &dirIn, const owl::vec3f &sample,
                                      owl::vec3f &dirOut) {
-    if (sample.z * mat.sumWeights < mat.diffuseWeight) {
+    if (sample.z < mat.diffuseWeight) {
         return sampleDiffuse(mat, dirIn, {sample.x, sample.y}, dirOut);
-    } else if (sample.z * mat.sumWeights < mat.diffuseWeight + mat.metalWeight) {
+    } else if (sample.z < mat.diffuseWeight + mat.metalWeight) {
         return sampleMetal(mat, dirIn, {sample.x, sample.y}, dirOut);
+    } else if (sample.z < mat.diffuseWeight + mat.metalWeight + mat.sheenWeight) {
+        return sampleSheen(mat, dirIn, {sample.x, sample.y}, dirOut);
     } else {
         return sampleClearcoat(mat, dirIn, {sample.x, sample.y}, dirOut);
     }
-    // return sampleDiffuse(mat, dirIn, {sample.x, sample.y}, dirOut);
+    // return sampleMetal(mat, dirIn, {sample.x, sample.y}, dirOut);
+    // return sampleLambertian(mat, dirIn, {sample.x, sample.y}, dirOut);
 };
 
 __inline__ __device__ float pdfMat(const MaterialResult &mat, const owl::vec3f &dirIn, const owl::vec3f &dirOut,
                                    const owl::vec3f &half) {
+    if (dirIn.z <= 0.f || dirOut.z <= 0.f) {
+        return 0.f;
+    }
     float pdf = 0.f;
     pdf += pdfDiffuse(mat, dirIn, dirOut, half) * mat.diffuseWeight;
     pdf += pdfMetal(mat, dirIn, dirOut, half) * mat.metalWeight;
     pdf += pdfClearcoat(mat, dirIn, dirOut, half) * mat.clearcoatWeight;
-    return pdf / mat.sumWeights;
-    // return pdfDiffuse(mat, dirIn, dirOut, half);
+    pdf += pdfSheen(mat, dirIn, dirOut, half) * mat.sheenWeight;
+    return pdf;
+    // return pdfMetal(mat, dirIn, dirOut, half);
+    // return pdfLambertian(mat, dirIn, dirOut);
 }
 
 __inline__ __device__ owl::vec3f evalMat(const MaterialResult &mat, const owl::vec3f &dirIn,
                                          const owl::vec3f &dirOut, const owl::vec3f &half) {
-    if (dirOut.z < 0.f) {
-        return 0;
-    }
     const owl::vec3f diffuse = mat.diffuseWeight * evalDiffuse(mat, dirIn, dirOut, half);
-    const owl::vec3f sheen = (1.f - mat.metallic) * mat.sheen * evalSheen(mat, dirIn, dirOut, half);
+    const owl::vec3f sheen = mat.sheenWeight * evalSheen(mat, dirIn, dirOut, half);
     const owl::vec3f metal = mat.metalWeight * evalMetal(mat, dirIn, dirOut, half);
     const owl::vec3f clearcoat = mat.clearcoatWeight * evalClearcoat(mat, dirIn, dirOut, half);
-    return (diffuse + metal + sheen + clearcoat) / mat.sumWeights;
-    // return evalDiffuse(mat, dirIn, dirOut, half);
+    return (diffuse + metal + sheen + clearcoat);
+    // return evalMetal(mat, dirIn, dirOut, half);
+    // return evalLambertian(mat, dirIn, dirOut);
 }

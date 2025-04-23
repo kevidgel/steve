@@ -36,12 +36,16 @@ set(trace_srcs
 set(trace_headers
         include/pathtracer/device/integrator.cuh
         include/pathtracer/device/geometry.cuh
+        include/pathtracer/device/gbuffer.cuh
+        include/pathtracer/device/reservoir.cuh
         include/pathtracer/device/ray.cuh
         include/pathtracer/device/material.cuh
         include/pathtracer/device/sampling.cuh
         include/pathtracer/shared/geometry_defs.cuh
         include/pathtracer/shared/material_defs.cuh
         include/pathtracer/shared/integrator_defs.cuh
+        include/pathtracer/shared/reservoir_defs.cuh
+        include/pathtracer/shared/gbuffer_defs.cuh
 )
 add_library(trace
         OBJECT
@@ -110,6 +114,8 @@ set(steve_headers
         include/pathtracer/shared/integrator_defs.cuh
         include/pathtracer/shared/material_defs.cuh
         include/pathtracer/shared/geometry_defs.cuh
+        include/pathtracer/shared/reservoir_defs.cuh
+        include/pathtracer/shared/gbuffer_defs.cuh
         include/utils/shader.hpp
 )
 

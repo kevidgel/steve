@@ -108,6 +108,7 @@ void MaterialBuffer::loadMtl(const robj::Result &scene, const std::filesystem::p
         mat.clearcoatGloss = objMat.clearcoat_roughness;
         mat.baseColor = toOwlVec3f(objMat.diffuse);
         mat.emission = toOwlVec3f(objMat.emission);
+        mat.ior = 1.f;
 
         mat.metallic = std::clamp(mat.metallic, 0.f, 1.f);
         mat.subsurface = std::clamp(mat.subsurface, 0.f, 1.f);
@@ -287,6 +288,9 @@ void MaterialBuffer::loadGltf(const tinygltf::Model &model, const std::filesyste
         // Subsurface
         mat.subsurface = 0.0f; // no equiv
 
+        // IOR
+        mat.ior = 1.f;
+
         mats[i] = mat;
         i++;
     }
@@ -310,6 +314,7 @@ void MaterialBuffer::renderProperties() {
 
     ImGui::Indent(10.f);
     if (ImGui::CollapsingHeader("Base Color")) {
+        ImGui::Checkbox("Enable Texture:##basecolor_tex", &mat.hasBaseColorTex);
         float baseColor[3] = {mat.baseColor.x, mat.baseColor.y, mat.baseColor.z};
         ImGui::PushItemWidth(290);
         ImGuiColorEditFlags flags = ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoSidePreview |
@@ -321,23 +326,29 @@ void MaterialBuffer::renderProperties() {
     if (ImGui::CollapsingHeader("Metallic-Roughness")) {
         ImGui::Checkbox("Enable Roughness Texture:", &mat.hasMetallicTex);
         ImGui::Checkbox("Enable Metallic Texture:", &mat.hasRoughnessTex);
-        ImGui::SliderFloat("##metallic", &mat.metallic, 0.f, 1.f, "%.2f");
-        ImGui::SliderFloat("##roughness", &mat.roughness, 0.f, 1.f, "%.2f");
-        ImGui::SliderFloat("##anisotropic", &mat.anisotropic, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Metallic##metallic", &mat.metallic, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Roughness##roughness", &mat.roughness, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Anisotropy##anisotropic", &mat.anisotropic, 0.f, 1.f, "%.2f");
     }
     if (ImGui::CollapsingHeader("Specular")) {
-        ImGui::Checkbox("Enable Texture:", &mat.hasSpecularTex);
-        ImGui::SliderFloat("##specular", &mat.specular, 0.f, 1.f, "%.2f");
-        ImGui::SliderFloat("##specular_tint", &mat.specularTint, 0.f, 1.f, "%.2f");
+        ImGui::Checkbox("Enable Texture:##specular_tex", &mat.hasSpecularTex);
+        ImGui::SliderFloat("Specular##specular", &mat.specular, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Tint##specular_tint", &mat.specularTint, 0.f, 1.f, "%.2f");
+    }
+    if (ImGui::CollapsingHeader("Glass")) {
+        ImGui::SliderFloat("IOR##ior", &mat.ior, 1.0, 1.8f, "%.2f");
     }
     if (ImGui::CollapsingHeader("Sheen")) {
-        ImGui::Checkbox("Enable Texture:", &mat.hasSheenTex);
-        ImGui::SliderFloat("##sheen", &mat.sheen, 0.f, 1.f, "%.2f");
-        ImGui::SliderFloat("##sheen_tint", &mat.sheenTint, 0.f, 1.f, "%.2f");
+        ImGui::Checkbox("Enable Texture:##sheen_tex", &mat.hasSheenTex);
+        ImGui::SliderFloat("Sheen##sheen", &mat.sheen, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Tint##sheen_tint", &mat.sheenTint, 0.f, 1.f, "%.2f");
     }
     if (ImGui::CollapsingHeader("Clearcoat")) {
-        ImGui::SliderFloat("##clearcoat", &mat.clearcoat, 0.f, 1.f, "%.2f");
-        ImGui::SliderFloat("##clearcoat_gloss", &mat.clearcoatGloss, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Clearcoat##clearcoat", &mat.clearcoat, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Gloss##clearcoat_gloss", &mat.clearcoatGloss, 0.f, 1.f, "%.2f");
+    }
+    if (ImGui::CollapsingHeader("Fake Subsurface")) {
+        ImGui::SliderFloat("Subsurface##subsurface", &mat.subsurface, 0.f, 1.f, "%.2f");
     }
     if (ImGui::CollapsingHeader("Emissive")) {
         float emit[3] = {mat.emission.x, mat.emission.y, mat.emission.z};

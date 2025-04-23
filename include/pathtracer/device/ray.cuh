@@ -8,6 +8,7 @@ typedef enum {
     RayMissed,
 } IntersectEvent;
 
+
 /// Global record per primary ray
 struct Record {
     owl::LCG<4> random;

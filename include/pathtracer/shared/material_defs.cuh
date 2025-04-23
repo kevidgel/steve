@@ -59,6 +59,7 @@ struct Material {
     float clearcoatGloss;
     owl::vec3f baseColor;
     owl::vec3f emission;
+    float ior;
 
     bool operator==(Material const &o) const {
         return std::tie(hasMetallicTex, hasSpecularTex, hasRoughnessTex, hasSheenTex, hasBaseColorTex,

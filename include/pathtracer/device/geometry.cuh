@@ -12,8 +12,8 @@
 
 /// Hit program
 OPTIX_CLOSEST_HIT_PROGRAM(TriangleMesh)() {
-    const TriangleMesh &self = owl::getProgramData<TriangleMesh>();
-    Record &prd = owl::getPRD<Record>();
+    const auto &self = owl::getProgramData<TriangleMesh>();
+    auto &prd = owl::getPRD<Record>();
 
     const owl::vec3f rayOrigin = optixGetWorldRayOrigin();
     const owl::vec3f rayDir = optixGetWorldRayDirection();
@@ -28,9 +28,6 @@ OPTIX_CLOSEST_HIT_PROGRAM(TriangleMesh)() {
 
     owl::vec3f gn = cross(v1 - v0, v2 - v0);
     prd.hitInfo.area = length(gn) * 0.5f;
-    if (dot(gn, rayDir) > 0) {
-        gn = -gn;
-    }
     gn = normalize(gn);
 
     const owl::vec3ui &normI = self.normsI[primId];
