@@ -1,12 +1,10 @@
-#define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-
 #include "pathtracer/host/render.hpp"
-#include "ImGuizmo.h"
 #include "glm/glm.hpp"
 #include "imgui.h"
+#include "ImGuizmo.h"
 #include "integrator.ptx.hpp"
+#include "restir_integrator.ptx.hpp"
+#include "gbuffer.ptx.hpp"
 #include "pathtracer/host/texture.hpp"
 
 #include <cuda_gl_interop.h>
@@ -159,7 +157,9 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
 
     // Initialize OWL
     owl.ctx = owlContextCreate(nullptr, 1);
-    owl.module = owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::integrator_ptx_source));
+    owl.lightingModule = owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::integrator_ptx_source));
+    owl.gBufferModule = owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::gbuffer_ptx_source));
+    owl.reSTIRModule = owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::restir_integrator_ptx_source));
 
     // Initialize geometries (Only triangles for now)
     OWLVarDecl triMeshVars[] = {
@@ -177,7 +177,9 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owl.mesh = owlGeomTypeCreate(owl.ctx, OWL_TRIANGLES, sizeof(TriangleMesh), triMeshVars, -1);
 
     // Set closest hit program for triangle mesh
-    owlGeomTypeSetClosestHit(owl.mesh, 0, owl.module, "TriangleMesh");
+    owlGeomTypeSetClosestHit(owl.mesh, 0, owl.lightingModule, "TriangleMesh");
+    owlGeomTypeSetClosestHit(owl.mesh, 0, owl.gBufferModule, "TriangleMesh");
+    owlGeomTypeSetClosestHit(owl.mesh, 0, owl.reSTIRModule, "TriangleMesh");
 
     // Build shader programs for geometries
     owlBuildPrograms(owl.ctx);
@@ -207,7 +209,6 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
 
     // Two level IAS
     owl.triMeshGroup = owlTrianglesGeomGroupCreate(owl.ctx, 1, &owl.triMeshGeom);
-
     owlGroupBuildAccel(owl.triMeshGroup);
     owl.world = owlInstanceGroupCreate(owl.ctx, 1, &owl.triMeshGroup);
     owlGroupBuildAccel(owl.world);
@@ -227,11 +228,30 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owl.lightsPrimsIBuffer =
         owlDeviceBufferCreate(owl.ctx, OWL_UINT, scene->lightPrimsI.size(), scene->lightPrimsI.data());
 
+    // Create gBuffer + reservoirs
+    owl.gBuffer[0] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(GBufferInfo),
+                                             camera.resolution.x * camera.resolution.y, nullptr);
+    owl.gBuffer[1] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(GBufferInfo),
+                                             camera.resolution.x * camera.resolution.y, nullptr);
+    owl.reservoir[0] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Reservoir),
+                                             camera.resolution.x * camera.resolution.y, nullptr);
+    owl.reservoir[1] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Reservoir),
+                                             camera.resolution.x * camera.resolution.y, nullptr);
+
     // Create launch params
     OWLVarDecl launchParamsVars[] = {
         {"frame.dirty", OWL_BOOL, OWL_OFFSETOF(LaunchParams, frame.dirty)},
         {"frame.id", OWL_INT, OWL_OFFSETOF(LaunchParams, frame.id)},
         {"frame.accum", OWL_INT, OWL_OFFSETOF(LaunchParams, frame.accum)},
+        {"prevCamera.xform.p", OWL_FLOAT3, OWL_OFFSETOF(LaunchParams, prevCamera.xform.p)},
+        {"prevCamera.xform.vx", OWL_FLOAT3, OWL_OFFSETOF(LaunchParams, prevCamera.xform.vx)},
+        {"prevCamera.xform.vy", OWL_FLOAT3, OWL_OFFSETOF(LaunchParams, prevCamera.xform.vy)},
+        {"prevCamera.xform.vz", OWL_FLOAT3, OWL_OFFSETOF(LaunchParams, prevCamera.xform.vz)},
+        {"prevCamera.sensorSize", OWL_FLOAT2, OWL_OFFSETOF(LaunchParams, prevCamera.sensorSize)},
+        {"prevCamera.resolution", OWL_INT2, OWL_OFFSETOF(LaunchParams, prevCamera.resolution)},
+        {"prevCamera.focalDist", OWL_FLOAT, OWL_OFFSETOF(LaunchParams, prevCamera.focalDist)},
+        {"prevCamera.apertureRadius", OWL_FLOAT, OWL_OFFSETOF(LaunchParams, prevCamera.apertureRadius)},
+        {"prevCamera.integrator", OWL_INT, OWL_OFFSETOF(LaunchParams, prevCamera.integrator)},
         {"camera.xform.p", OWL_FLOAT3, OWL_OFFSETOF(LaunchParams, camera.xform.p)},
         {"camera.xform.vx", OWL_FLOAT3, OWL_OFFSETOF(LaunchParams, camera.xform.vx)},
         {"camera.xform.vy", OWL_FLOAT3, OWL_OFFSETOF(LaunchParams, camera.xform.vy)},
@@ -247,6 +267,11 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {"lights.vertsI", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, lights.vertsI)},
         {"lights.primsI", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, lights.primsI)},
         {"lights.size", OWL_UINT, OWL_OFFSETOF(LaunchParams, lights.size)},
+        {"curReservoir", OWL_UINT, OWL_OFFSETOF(LaunchParams, curReservoir)},
+        {"gBuffer0", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, gBuffer0)},
+        {"gBuffer1", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, gBuffer1)},
+        {"reservoir0", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, reservoir0)},
+        {"reservoir1", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, reservoir1)},
         {nullptr},
     };
 
@@ -255,6 +280,15 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owlParamsSet1b(owl.launchParams, "frame.dirty", frame.dirty);
     owlParamsSet1i(owl.launchParams, "frame.id", frame.id);
     owlParamsSet1i(owl.launchParams, "frame.accum", frame.accum);
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.p", xform.p.x, xform.p.y, xform.p.z);
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.vx", xform.l.vx.x, xform.l.vx.y, xform.l.vx.z);
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.vy", xform.l.vy.x, xform.l.vy.y, xform.l.vy.z);
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.vz", xform.l.vz.x, xform.l.vz.y, xform.l.vz.z);
+    owlParamsSet2f(owl.launchParams, "prevCamera.sensorSize", camera.sensorSize.x, camera.sensorSize.y);
+    owlParamsSet2i(owl.launchParams, "prevCamera.resolution", camera.resolution.x, camera.resolution.y);
+    owlParamsSet1f(owl.launchParams, "prevCamera.focalDist", camera.focalDist);
+    owlParamsSet1f(owl.launchParams, "prevCamera.apertureRadius", camera.apertureRadius);
+    owlParamsSet1i(owl.launchParams, "prevCamera.integrator", camera.integrator);
     owlParamsSet3f(owl.launchParams, "camera.xform.p", xform.p.x, xform.p.y, xform.p.z);
     owlParamsSet3f(owl.launchParams, "camera.xform.vx", xform.l.vx.x, xform.l.vx.y, xform.l.vx.z);
     owlParamsSet3f(owl.launchParams, "camera.xform.vy", xform.l.vy.x, xform.l.vy.y, xform.l.vy.z);
@@ -270,6 +304,11 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owlParamsSetBuffer(owl.launchParams, "lights.vertsI", owl.lightsVertsIBuffer);
     owlParamsSetBuffer(owl.launchParams, "lights.primsI", owl.lightsPrimsIBuffer);
     owlParamsSet1ui(owl.launchParams, "lights.size", scene->lightVertsI.size());
+    owlParamsSet1ui(owl.launchParams, "curReservoir", 0);
+    owlParamsSetBuffer(owl.launchParams, "gBuffer0", owl.gBuffer[0]);
+    owlParamsSetBuffer(owl.launchParams, "gBuffer1", owl.gBuffer[1]);
+    owlParamsSetBuffer(owl.launchParams, "reservoir0", owl.reservoir[0]);
+    owlParamsSetBuffer(owl.launchParams, "reservoir1", owl.reservoir[1]);
 
     // Create miss program
     OWLVarDecl missProgVars[] = {
@@ -278,10 +317,29 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {"envMap", OWL_TEXTURE, OWL_OFFSETOF(MissProgData, envMap)},
         {nullptr},
     };
-    owl.missProg = owlMissProgCreate(owl.ctx, owl.module, "Miss", sizeof(MissProgData), missProgVars, -1);
-    owlMissProgSet3f(owl.missProg, "envColor", {0.8f, 0.8f, 0.8f});
-    owlMissProgSet1b(owl.missProg, "hasEnvMap", (owl.envMap != nullptr));
-    owlMissProgSetTexture(owl.missProg, "envMap", owl.envMap);
+
+    owl.lightingMissProg = owlMissProgCreate(owl.ctx, owl.lightingModule, "Miss", sizeof(MissProgData), missProgVars, -1);
+    owlMissProgSet3f(owl.lightingMissProg, "envColor", {0.8f, 0.8f, 0.8f});
+    owlMissProgSet1b(owl.lightingMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    owlMissProgSetTexture(owl.lightingMissProg, "envMap", owl.envMap);
+
+    owl.reSTIRMissProg = owlMissProgCreate(owl.ctx, owl.reSTIRModule, "Miss2", sizeof(MissProgData), missProgVars, -1);
+    owlMissProgSet3f(owl.reSTIRMissProg, "envColor", {0.8f, 0.8f, 0.8f});
+    owlMissProgSet1b(owl.reSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    owlMissProgSetTexture(owl.reSTIRMissProg, "envMap", owl.envMap);
+
+    owl.gBufferMissProg = owlMissProgCreate(owl.ctx, owl.gBufferModule, "Miss", sizeof(MissProgData), missProgVars, -1);
+    owlMissProgSet3f(owl.gBufferMissProg, "envColor", {0.8f, 0.8f, 0.8f});
+    owlMissProgSet1b(owl.gBufferMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    owlMissProgSetTexture(owl.gBufferMissProg, "envMap", owl.envMap);
+
+    OWLVarDecl geometryPassVars[] = {
+        {"pboSize", OWL_INT2, OWL_OFFSETOF(GeometryPassData, pboSize)},
+        {nullptr}
+    };
+
+    owl.gBufferRayGen = owlRayGenCreate(owl.ctx, owl.gBufferModule, "GeometryPass", sizeof(GeometryPassData), geometryPassVars, -1);
+    owlRayGenSet2i(owl.gBufferRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
 
     OWLVarDecl rayGenVars[] = {
         {"pboPtr", OWL_RAW_POINTER, OWL_OFFSETOF(RayGenData, pboPtr)},
@@ -289,11 +347,13 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {nullptr}
     };
 
-    owl.cameraBuffer = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Camera), 1, nullptr);
+    owl.lightingRayGen = owlRayGenCreate(owl.ctx, owl.lightingModule, "RayGen", sizeof(RayGenData), rayGenVars, -1);
+    owlRayGenSetPointer(owl.lightingRayGen, "pboPtr", devPboPtr);
+    owlRayGenSet2i(owl.lightingRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
 
-    owl.rayGen = owlRayGenCreate(owl.ctx, owl.module, "RayGen", sizeof(RayGenData), rayGenVars, -1);
-    owlRayGenSetPointer(owl.rayGen, "pboPtr", devPboPtr);
-    owlRayGenSet2i(owl.rayGen, "pboSize", camera.resolution.x, camera.resolution.y);
+    owl.reSTIRRayGen = owlRayGenCreate(owl.ctx, owl.reSTIRModule, "RayGen", sizeof(RayGenData), rayGenVars, -1);
+    owlRayGenSetPointer(owl.reSTIRRayGen, "pboPtr", devPboPtr);
+    owlRayGenSet2i(owl.reSTIRRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
 
     spdlog::info("Building programs, pipeline, and SBT...");
     owlBuildPrograms(owl.ctx);
@@ -303,6 +363,7 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     cudaGraphicsUnmapResources(1, &pbo, nullptr);
 
     materialBuffer = scene->materialBuffer;
+    oldCamera = camera;
 }
 
 Render::~Render() {
@@ -318,8 +379,8 @@ Render::~Render() {
     owlBufferRelease(owl.normsIBuffer);
     owlBufferRelease(owl.texCoordsBuffer);
     owlBufferRelease(owl.texCoordsIBuffer);
-    owlModuleRelease(owl.module);
-    owlRayGenRelease(owl.rayGen);
+    owlModuleRelease(owl.lightingModule);
+    owlRayGenRelease(owl.lightingRayGen);
     owlContextDestroy(owl.ctx);
 
     /********** Cleanup GL **********/
@@ -392,6 +453,12 @@ void Render::moveCamera(const CameraAction &action, float speed) {
 
 /// Update state
 void Render::update() {
+    if (accumFrames) {
+        frame.dirty = (oldCamera != camera);
+    } else {
+        frame.dirty = true;
+    }
+
     if (materialBuffer.dirty) {
         owlBufferUpload(owl.matsBuffer, materialBuffer.mats.data(), 0, materialBuffer.mats.size());
         frame.dirty = true;
@@ -405,19 +472,31 @@ void Render::update() {
     owlParamsSet1i(owl.launchParams, "frame.id", frame.id);
     owlParamsSet1i(owl.launchParams, "frame.accum", frame.accum);
 
-    if (frame.dirty) {
-        const owl::affine3f xform = camera.xform();
-        owlParamsSet3f(owl.launchParams, "camera.xform.p", xform.p.x, xform.p.y, xform.p.z);
-        owlParamsSet3f(owl.launchParams, "camera.xform.vx", xform.l.vx.x, xform.l.vx.y, xform.l.vx.z);
-        owlParamsSet3f(owl.launchParams, "camera.xform.vy", xform.l.vy.x, xform.l.vy.y, xform.l.vy.z);
-        owlParamsSet3f(owl.launchParams, "camera.xform.vz", xform.l.vz.x, xform.l.vz.y, xform.l.vz.z);
-        owlParamsSet2f(owl.launchParams, "camera.sensorSize", camera.sensorSize.x, camera.sensorSize.y);
-        owlParamsSet2i(owl.launchParams, "camera.resolution", camera.resolution.x, camera.resolution.y);
-        owlParamsSet1f(owl.launchParams, "camera.focalDist", camera.focalDist);
-        owlParamsSet1f(owl.launchParams, "camera.apertureRadius", camera.apertureRadius);
-        owlParamsSet1i(owl.launchParams, "camera.integrator", camera.integrator);
-    }
+    // Flip reservoirs
+    curReservoir = 1 - curReservoir;
+    owlParamsSet1ui(owl.launchParams, "curReservoir", curReservoir);
 
+    const owl::affine3f oldXform = oldCamera.xform();
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.p", oldXform.p.x, oldXform.p.y, oldXform.p.z);
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.vx", oldXform.l.vx.x, oldXform.l.vx.y, oldXform.l.vx.z);
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.vy", oldXform.l.vy.x, oldXform.l.vy.y, oldXform.l.vy.z);
+    owlParamsSet3f(owl.launchParams, "prevCamera.xform.vz", oldXform.l.vz.x, oldXform.l.vz.y, oldXform.l.vz.z);
+    owlParamsSet2f(owl.launchParams, "prevCamera.sensorSize", oldCamera.sensorSize.x, oldCamera.sensorSize.y);
+    owlParamsSet2i(owl.launchParams, "prevCamera.resolution", oldCamera.resolution.x, oldCamera.resolution.y);
+    owlParamsSet1f(owl.launchParams, "prevCamera.focalDist", oldCamera.focalDist);
+    owlParamsSet1f(owl.launchParams, "prevCamera.apertureRadius", oldCamera.apertureRadius);
+    owlParamsSet1i(owl.launchParams, "prevCamera.integrator", oldCamera.integrator);
+
+    const owl::affine3f xform = camera.xform();
+    owlParamsSet3f(owl.launchParams, "camera.xform.p", xform.p.x, xform.p.y, xform.p.z);
+    owlParamsSet3f(owl.launchParams, "camera.xform.vx", xform.l.vx.x, xform.l.vx.y, xform.l.vx.z);
+    owlParamsSet3f(owl.launchParams, "camera.xform.vy", xform.l.vy.x, xform.l.vy.y, xform.l.vy.z);
+    owlParamsSet3f(owl.launchParams, "camera.xform.vz", xform.l.vz.x, xform.l.vz.y, xform.l.vz.z);
+    owlParamsSet2f(owl.launchParams, "camera.sensorSize", camera.sensorSize.x, camera.sensorSize.y);
+    owlParamsSet2i(owl.launchParams, "camera.resolution", camera.resolution.x, camera.resolution.y);
+    owlParamsSet1f(owl.launchParams, "camera.focalDist", camera.focalDist);
+    owlParamsSet1f(owl.launchParams, "camera.apertureRadius", camera.apertureRadius);
+    owlParamsSet1i(owl.launchParams, "camera.integrator", camera.integrator);
 }
 
 /// Launch kernel and display results per frame
@@ -454,21 +533,21 @@ void Render::render() {
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
     flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
 
-    if (accumFrames) {
-        frame.dirty = (oldCamera != camera);
-    } else {
-        frame.dirty = true;
-    }
-
     update(); // Update state on GPU
 
     ImGui::Begin("Render", nullptr, flags);
-    // Run kernel
-    gl.shader->use();
-    owlParamsSet1b(owl.launchParams, "frame.dirty", frame.dirty);
-    owlLaunch2D(owl.rayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
-    cudaDeviceSynchronize();
-    gl.shader->set_float("num_samples", static_cast<float>(frame.accum));
+
+    // The most important lines
+    if (camera.integrator == 6) {
+        owlLaunch2D(owl.gBufferRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
+        cudaDeviceSynchronize();
+        owlLaunch2D(owl.reSTIRRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
+        cudaDeviceSynchronize();
+    } else {
+        owlLaunch2D(owl.lightingRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
+        cudaDeviceSynchronize();
+    }
+
     ImVec2 availRegion = ImGui::GetContentRegionAvail();
 
     float cursorX = (availRegion.x - static_cast<float>(camera.resolution.x)) * 0.5f;

@@ -5,15 +5,11 @@
 
 #pragma once
 
-#include "owl/common/math/vec.h"
-
-struct Candidate {
-
-    float pdf;
-};
+#include "light_defs.cuh"
 
 struct Reservoir {
-    Candidate chosen;
+    bool valid;
+    LightSampleInfo sample;
     float sumWeights;
     uint count;
 };

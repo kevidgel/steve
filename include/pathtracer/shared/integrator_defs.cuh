@@ -9,6 +9,7 @@
 #include "material_defs.cuh"
 #include "owl/common/math/vec.h"
 #include "owl/owl.h"
+#include "ray_defs.cuh"
 #include "reservoir_defs.cuh"
 
 #include <cuda_runtime.h>
@@ -37,19 +38,27 @@ struct Frame {
 
 struct LaunchParams {
     Frame frame;
+    DeviceCamera prevCamera;
     DeviceCamera camera;
     OptixTraversableHandle world;
     Material *mats;
-    Lights lights;
+    LightsMesh lights;
+    uint curReservoir;
+    GBufferInfo *gBuffer0;
+    GBufferInfo *gBuffer1;
+    Reservoir *reservoir0;
+    Reservoir *reservoir1;
+};
+
+// Store primary hit information
+struct GeometryPassData {
+    owl::vec2i pboSize;
 };
 
 struct RayGenData {
+    // Our "framebuffer"
     owl::vec4f *pboPtr;
     owl::vec2i pboSize;
-
-    // Same sizes as pbo
-    Reservoir *temporalReservoir;
-    Reservoir *spatialReservoir;
 };
 
 struct MissProgData {

@@ -1,3 +1,7 @@
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
 #include "pathtracer/host/scene.hpp"
 #include "pathtracer/host/texture.hpp"
 

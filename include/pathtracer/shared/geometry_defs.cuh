@@ -7,7 +7,7 @@
 
 #include "owl/common/math/vec.h"
 
-struct Lights {
+struct LightsMesh {
     owl::vec3f *verts;
     owl::vec3ui *vertsI;
     uint *primsI; // Global primitive ids

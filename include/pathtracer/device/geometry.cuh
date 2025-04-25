@@ -6,6 +6,7 @@
 #pragma once
 
 #include "geometry_defs.cuh"
+#include "integrator.cuh"
 #include "owl/common/math/vec.h"
 #include "owl/owl_device.h"
 #include "ray.cuh"
@@ -13,7 +14,7 @@
 /// Hit program
 OPTIX_CLOSEST_HIT_PROGRAM(TriangleMesh)() {
     const auto &self = owl::getProgramData<TriangleMesh>();
-    auto &prd = owl::getPRD<Record>();
+    auto &prd = owl::getPRD<RayInfo>();
 
     const owl::vec3f rayOrigin = optixGetWorldRayOrigin();
     const owl::vec3f rayDir = optixGetWorldRayDirection();
@@ -44,12 +45,13 @@ OPTIX_CLOSEST_HIT_PROGRAM(TriangleMesh)() {
 
     // For now, return the normal and cancel the ray
     prd.hitInfo.t = optixGetRayTmax();
+    prd.hitInfo.dirIn = normalize(rayDir);
     prd.hitInfo.p = rayOrigin + prd.hitInfo.t * rayDir;
     prd.hitInfo.gn = gn;
     prd.hitInfo.sn = sn;
     prd.hitInfo.uv = uv;
     prd.hitInfo.mat = self.matsI[primId];
     prd.hitInfo.id = primId;
-    prd.emitted = 0.0f;
-    prd.intersectEvent = RayScattered;
+    prd.hitInfo.emitted = optixLaunchParams.mats[prd.hitInfo.mat].emission;
+    prd.hitInfo.intersectEvent = RayScattered;
 }

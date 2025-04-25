@@ -31,21 +31,24 @@ add_subdirectory(ext/tinygltf)
 # Trace PTX compilation
 enable_language(CUDA)
 set(trace_srcs
+        src/pathtracer/device/restir_integrator.cu
         src/pathtracer/device/integrator.cu
+        src/pathtracer/device/gbuffer.cu
 )
 set(trace_headers
         include/pathtracer/device/integrator.cuh
         include/pathtracer/device/geometry.cuh
-        include/pathtracer/device/gbuffer.cuh
         include/pathtracer/device/reservoir.cuh
         include/pathtracer/device/ray.cuh
         include/pathtracer/device/material.cuh
         include/pathtracer/device/sampling.cuh
+        include/pathtracer/device/lights.cuh
         include/pathtracer/shared/geometry_defs.cuh
         include/pathtracer/shared/material_defs.cuh
         include/pathtracer/shared/integrator_defs.cuh
         include/pathtracer/shared/reservoir_defs.cuh
-        include/pathtracer/shared/gbuffer_defs.cuh
+        include/pathtracer/shared/light_defs.cuh
+        include/pathtracer/shared/ray_defs.cuh
 )
 add_library(trace
         OBJECT
@@ -74,27 +77,30 @@ target_compile_options(trace
 file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/generated/")
 
 # NOTE: This is super hacky
-set(PTX_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/trace.dir/src/pathtracer/device/integrator.ptx")
-get_filename_component(PTX_NAME ${PTX_SOURCE} NAME_WE)
-set(PTX_OUTPUT_DIR "${PROJECT_BINARY_DIR}/generated")
-set(PTX_OUTPUT "${PTX_OUTPUT_DIR}/${PTX_NAME}.ptx.hpp")
-add_custom_command(
-        OUTPUT ${PTX_OUTPUT}
-        COMMAND ${PROJECT_BINARY_DIR}/bin/embed ${PTX_SOURCE} ${PTX_OUTPUT}
-        DEPENDS embed trace ${trace_srcs} ${trace_headers}
-        COMMENT "Embedding PTX ${PTX_NAME}"
-)
-message(STATUS "PTX output: ${PTX_OUTPUT}")
+set(PTX_HEADERS)
+foreach(src IN LISTS trace_srcs)
+    get_filename_component(name ${src} NAME_WE)
+    string(REPLACE ".cu" ".ptx" ptx_rel ${src})
+    set(ptx_source "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/trace.dir/${ptx_rel}")
+    set(ptx_header "${PROJECT_BINARY_DIR}/generated/${name}.ptx.hpp")
+    add_custom_command(
+            OUTPUT   ${ptx_header}
+            COMMAND  ${PROJECT_BINARY_DIR}/bin/embed ${ptx_source} ${ptx_header}
+            DEPENDS embed trace ${trace_srcs} ${trace_headers}
+            COMMENT  "Embedding PTX ${name}"
+    )
+    list(APPEND PTX_HEADERS ${ptx_header})
+endforeach()
 
 # Add custom target
 add_custom_target(embed_trace
         DEPENDS
-        ${PTX_OUTPUT}
+        ${PTX_HEADERS}
 )
 
 add_library(embed_shaders
         INTERFACE
-        ${PTX_OUTPUT}
+        ${PTX_HEADERS}
 )
 
 add_dependencies(embed_shaders embed_trace)
@@ -115,7 +121,6 @@ set(steve_headers
         include/pathtracer/shared/material_defs.cuh
         include/pathtracer/shared/geometry_defs.cuh
         include/pathtracer/shared/reservoir_defs.cuh
-        include/pathtracer/shared/gbuffer_defs.cuh
         include/utils/shader.hpp
 )
 

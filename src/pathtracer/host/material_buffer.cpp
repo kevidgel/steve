@@ -352,12 +352,8 @@ void MaterialBuffer::renderProperties() {
     }
     if (ImGui::CollapsingHeader("Emissive")) {
         float emit[3] = {mat.emission.x, mat.emission.y, mat.emission.z};
-        ImGui::PushItemWidth(290);
-        ImGuiColorEditFlags flags = ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoSidePreview |
-                                    ImGuiColorEditFlags_NoSmallPreview;
-        ImGui::ColorPicker3("##emissive", emit, flags);
+        ImGui::InputFloat3("Emission##emission", emit);
         mat.emission = {emit[0], emit[1], emit[2]};
-        ImGui::PopItemWidth();
     }
     ImGui::Unindent(10.f);
 

@@ -1,93 +1,14 @@
 #include "geometry.cuh"
 #include "integrator.cuh"
+
+#include "lights.cuh"
 #include "material.cuh"
 #include "ray.cuh"
 
 #include <optix_device.h>
 
-#define SPP 1
+#define SPP 4
 #define MAX_DEPTH 16
-#define RAY_EPS (1e-4f)
-#define RAY_MAX (1e10f)
-
-__inline__ __device__ owl::Ray generateRay(float u, float v, const owl::vec2f &lensSample) {
-    const DeviceCamera &camera = optixLaunchParams.camera;
-    const owl::vec2f disk = camera.apertureRadius * randomInUnitDisk(lensSample);
-    const owl::vec3f origin(disk.x, disk.y, 0.f);
-    const owl::vec3f direction(camera.sensorSize.x * (0.5f - u / camera.resolution.x),
-                               camera.sensorSize.y * (v / camera.resolution.y - 0.5f), camera.focalDist);
-    const owl::vec3f tOrigin = xfmPt(camera.xform, origin);
-    const owl::vec3f tDirection = xfmVec(camera.xform, direction - origin);
-    return owl::Ray(tOrigin, tDirection, RAY_EPS, RAY_MAX);
-}
-
-// Samples a point on a light
-__inline__ __device__ void sampleLight(const owl::vec3f &p, const owl::vec3f &sample, ScatterRecord &scatter) {
-    const Lights &lights = optixLaunchParams.lights;
-    uint lightI = static_cast<uint>(sample.x * lights.size);
-    const owl::vec3ui vertI = lights.vertsI[lightI];
-    const owl::vec3f v0 = lights.verts[vertI.x];
-    const owl::vec3f v1 = lights.verts[vertI.y];
-    const owl::vec3f v2 = lights.verts[vertI.z];
-
-    float u = sample.y;
-    float v = sample.z;
-    if (u + v > 1.f) {
-        u = 1.f - u;
-        v = 1.f - v;
-    }
-    float w = 1.f - u - v;
-
-    const owl::vec3f lightP = (u * v0) + (v * v1) + (w * v2);
-    const owl::vec3f perp = cross(v1 - v0, v2 - v0);
-    // const float lenPerp = length(perp);
-    const owl::vec3f d = lightP - p;
-
-    const float area = length(perp) * 0.5f;
-    const owl::vec3f norm = normalize(perp);
-    const float dist2 = dot(d, d);
-    const owl::vec3f wo = normalize(d);
-    const float cos = fabsf(dot(wo, norm));
-
-    scatter.dir = wo;
-    scatter.p = lightP;
-    scatter.primI = lights.primsI[lightI];
-    scatter.pdf = (dist2) / (lights.size * area * cos);
-}
-
-__inline__ __device__ float pdfLight(const owl::Ray &ray, const Record &prd) {
-    float pdf = 0.f;
-    if (luminance(optixLaunchParams.mats[prd.hitInfo.mat].emission) > 0.01) {
-        // Compute pdf of light
-        owl::vec3f d = prd.hitInfo.p - ray.origin;
-        float dist2 = dot(d, d);
-        float cos = abs(dot(normalize(d), prd.hitInfo.gn));
-
-        pdf = dist2 / (optixLaunchParams.lights.size * prd.hitInfo.area * cos);
-    }
-    return pdf;
-}
-
-/// Extremely inefficient
-__inline__ __device__ float pdfLightExpensive(const owl::Ray &ray, Record &prd) {
-    traceRay(optixLaunchParams.world, ray, prd);
-    float pdf = 0.f;
-    if (luminance(optixLaunchParams.mats[prd.hitInfo.mat].emission) > 0.01) {
-        // Compute pdf of light
-        owl::vec3f d = prd.hitInfo.p - ray.origin;
-        float dist2 = dot(d, d);
-        float cos = abs(dot(normalize(d), prd.hitInfo.gn));
-
-        pdf = dist2 / (optixLaunchParams.lights.size * prd.hitInfo.area * cos);
-    }
-    return pdf;
-}
-
-/// Extremely inefficient
-__inline__ __device__ bool visiblityExpensive(const owl::Ray &ray, uint id, owl::vec3f &n, Record &prd) {
-    traceRay(optixLaunchParams.world, ray, prd);
-    return (id == prd.hitInfo.id);
-}
 
 __inline__ __device__ float powerHeuristic(float pdf1, float pdf2, float power) {
     const float pow1 = powf(pdf1, power);
@@ -122,24 +43,24 @@ __inline__ __device__ int randomIndex(float w0, float w1, float w2, float w3, fl
 }
 
 /// Integrator
-__inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) {
+__inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, RayInfo &prd, float power) {
     owl::vec3f result(0.f);
     owl::vec3f throughput(1.f);
     float misWeight = 1.f;
     ONB onb({0.f, 0.f, 1.f});
-    ScatterRecord scatterRecord;
-    Record lightPrd;
+    LightSampleInfo lightRecord;
+    RayInfo lightPrd;
 
     // First shoot primary ray
-    prd.emitted = 0.f;
+    prd.hitInfo.emitted = 0.f;
     traceRay(optixLaunchParams.world, ray, prd);
     MaterialResult mat;
     for (int depth = 0; depth <= MAX_DEPTH; ++depth) {
         // Intersect
-        if (prd.intersectEvent == RayScattered) {
+        if (prd.hitInfo.intersectEvent == RayScattered) {
 
             // Obtain material at point
-            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, ray, mat);
+            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd.hitInfo, mat);
 
             // First check if material is emissive
             owl::vec3f emit = misWeight * mat.emission;
@@ -165,13 +86,14 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) 
             {
                 // Sample lights
                 const owl::vec3f lightSample = {prd.random(), prd.random(), prd.random()};
-                sampleLight(prd.hitInfo.p, lightSample, scatterRecord);
-                owl::Ray lightRay(prd.hitInfo.p, scatterRecord.dir, RAY_EPS, RAY_MAX);
+                sampleLight(prd.hitInfo.p, lightSample, lightRecord);
+                owl::vec3f lightDir = normalize(lightRecord.p - prd.hitInfo.p);
+                owl::Ray lightRay(prd.hitInfo.p, lightDir, RAY_EPS, RAY_MAX);
 
-                const owl::vec3f lightDirOut = onb.toLocal(scatterRecord.dir);
+                const owl::vec3f lightDirOut = onb.toLocal(lightDir);
                 const owl::vec3f half = normalize(dirIn + lightDirOut);
 
-                float pdfLight1 = scatterRecord.pdf;
+                float pdfLight1 = lightRecord.pdf;
                 if (pdfLight1 > 0.f) {
                     // Attempt to find emitted light
                     traceRay(optixLaunchParams.world, lightRay, lightPrd);
@@ -187,7 +109,7 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) 
                     owl::vec3f emitLight = optixLaunchParams.mats[lightPrd.hitInfo.mat].emission;
 
                     // Check if occluded
-                    if (lightPrd.hitInfo.id != scatterRecord.primI) {
+                    if (lightPrd.hitInfo.id != lightRecord.primI) {
                         emitLight = 0.f;
                     }
                     if (dot(lightRay.direction, prd.hitInfo.sn) < 0.f) {
@@ -232,9 +154,9 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) 
             }
 
             // Update
-        } else if (prd.intersectEvent == RayMissed) {
+        } else if (prd.hitInfo.intersectEvent == RayMissed) {
             // hit background
-            result += throughput * misWeight * prd.emitted;
+            result += throughput * misWeight * prd.hitInfo.emitted;
             break;
         } else {
             // debug color
@@ -255,48 +177,53 @@ __inline__ __device__ owl::vec3f LiMIS(owl::Ray &ray, Record &prd, float power) 
     return result;
 }
 
-__inline__ __device__ owl::vec3f LiDebug(owl::Ray &ray, Record &prd) {
+__inline__ __device__ owl::vec3f LiDebugGBuffer(const GBufferInfo& gBufferInfo) {
+    return (gBufferInfo.hitInfo.sn + 1.f) * 0.5f;
+}
+
+__inline__ __device__ owl::vec3f LiDebug(owl::Ray &ray, RayInfo &prd) {
     traceRay(optixLaunchParams.world, ray, prd);
 
-    if (prd.intersectEvent == RayScattered) {
-        if (dot(ray.direction, prd.hitInfo.gn) < 0.f) {
-            return (prd.hitInfo.gn + 1.f) / 2.f;
-        }
+    owl::vec3f res(0.f);
+    if (prd.hitInfo.intersectEvent == RayScattered) {
+        MaterialResult mat;
+        getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd.hitInfo, mat);
+        res = mat.baseColor;
     }
 
-    return {0.f, 0.f, 0.f};
+    return res;
 }
 
 /// Lights integrator
-__inline__ __device__ owl::vec3f LiDirect(owl::Ray &ray, Record &prd) {
+__inline__ __device__ owl::vec3f LiDirect(owl::Ray &ray, RayInfo &prd) {
     owl::vec3f result(0.f);
     owl::vec3f throughput(1.f);
     ONB onb({0.f, 0.f, 1.f});
-    ScatterRecord scatterRecord;
-    Record lightPrd;
+    LightSampleInfo lightRecord;
+    RayInfo lightPrd;
     int prevId = -1;
 
-    prd.emitted = 0.f;
+    prd.hitInfo.emitted = 0.f;
     for (int depth = 0; depth <= 1; ++depth) {
         traceRay(optixLaunchParams.world, ray, prd);
         // Intersect
-        if (prd.intersectEvent == RayScattered) {
+        if (prd.hitInfo.intersectEvent == RayScattered) {
 
             // First check if material is emissive
-            prd.emitted = optixLaunchParams.mats[prd.hitInfo.mat].emission;
+            prd.hitInfo.emitted = optixLaunchParams.mats[prd.hitInfo.mat].emission;
             if (prevId != -1 && prevId != prd.hitInfo.id) {
-                prd.emitted = 0.f;
+                prd.hitInfo.emitted = 0.f;
             }
 
             // Terminate if depth is reached
-            if (depth == 1 || luminance(prd.emitted) > 0.f) {
-                result += throughput * prd.emitted;
+            if (depth == 1 || luminance(prd.hitInfo.emitted) > 0.f) {
+                result += throughput * prd.hitInfo.emitted;
                 break;
             }
 
             // Obtain material at point
             MaterialResult mat;
-            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, ray, mat);
+            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd.hitInfo, mat);
 
             // Cutout material
             if (prd.random() < 1.f - mat.alpha) {
@@ -311,22 +238,23 @@ __inline__ __device__ owl::vec3f LiDirect(owl::Ray &ray, Record &prd) {
 
             // Sample lights
             const owl::vec3f lightSample = {prd.random(), prd.random(), prd.random()};
-            sampleLight(prd.hitInfo.p, lightSample, scatterRecord);
+            sampleLight(prd.hitInfo.p, lightSample, lightRecord);
 
-            const float pdf = scatterRecord.pdf;
-            prevId = scatterRecord.primI;
+            const float pdf = lightRecord.pdf;
+            prevId = lightRecord.primI;
             if (pdf > 0.f) {
-                const owl::vec3f lightDirOut = onb.toLocal(scatterRecord.dir);
+                const owl::vec3f lightDirOutWorld = normalize(lightRecord.p - prd.hitInfo.p);
+                const owl::vec3f lightDirOut = onb.toLocal(lightDirOutWorld);
                 const owl::vec3f half = normalize(dirIn + lightDirOut);
                 const owl::vec3f eval = evalMat(mat, dirIn, lightDirOut, half);
 
-                result += throughput * prd.emitted;
+                result += throughput * prd.hitInfo.emitted;
                 throughput *= eval / pdf;
-                ray = owl::Ray(prd.hitInfo.p, scatterRecord.dir, 1e-3f, 1e10f);
+                ray = owl::Ray(prd.hitInfo.p, lightDirOutWorld, 1e-3f, 1e10f);
             }
-        } else if (prd.intersectEvent == RayMissed) {
+        } else if (prd.hitInfo.intersectEvent == RayMissed) {
             // hit background
-            result += throughput * prd.emitted;
+            result += throughput * prd.hitInfo.emitted;
             break;
         } else {
             // debug color
@@ -348,22 +276,20 @@ __inline__ __device__ owl::vec3f LiDirect(owl::Ray &ray, Record &prd) {
 }
 
 /// Normal integrator
-__inline__ __device__ owl::vec3f Li(owl::Ray &ray, Record &prd) {
+__inline__ __device__ owl::vec3f Li(owl::Ray &ray, RayInfo &prd) {
     owl::vec3f result(0.f);
     owl::vec3f throughput(1.f);
     ONB onb({0.f, 0.f, 1.f});
-    ScatterRecord scatterRecord;
-    Record lightPrd;
 
-    prd.emitted = 0.f;
-    for (int depth = 0; depth <= MAX_DEPTH; ++depth) {
+    prd.hitInfo.emitted = 0.f;
+    for (int depth = 0; depth <= 10; ++depth) {
         traceRay(optixLaunchParams.world, ray, prd);
         // Intersect
-        if (prd.intersectEvent == RayScattered) {
+        if (prd.hitInfo.intersectEvent == RayScattered) {
 
             // Obtain material at point
             MaterialResult mat;
-            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, ray, mat);
+            getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd.hitInfo, mat);
 
             // First check if material is emissive
             owl::vec3f emit = mat.emission;
@@ -400,9 +326,9 @@ __inline__ __device__ owl::vec3f Li(owl::Ray &ray, Record &prd) {
             result += throughput * emit;
             throughput *= evalBRDF / pdfBRDF;
             ray = owl::Ray(prd.hitInfo.p, onb.toWorld(brdfDirOut), 1e-3f, 1e10f);
-        } else if (prd.intersectEvent == RayMissed) {
+        } else if (prd.hitInfo.intersectEvent == RayMissed) {
             // hit background
-            result += throughput * prd.emitted;
+            result += throughput * prd.hitInfo.emitted;
             break;
         } else {
             // debug color
@@ -423,18 +349,18 @@ __inline__ __device__ owl::vec3f Li(owl::Ray &ray, Record &prd) {
     return result;
 }
 
-__inline__ __device__ owl::vec3f LiRISDirect(owl::Ray &ray, Record &prd, float power) {
+__inline__ __device__ owl::vec3f LiRISDirect(owl::Ray &ray, RayInfo &prd, float power) {
     const int nBRDF = 2, nNEE = 2;
-    prd.emitted = 0.f;
+    prd.hitInfo.emitted = 0.f;
     owl::vec3f result(0.f);
 
     // Shoot primary ray
     traceRay(optixLaunchParams.world, ray, prd);
 
-    if (prd.intersectEvent == RayScattered) {
+    if (prd.hitInfo.intersectEvent == RayScattered) {
         // Get material
         MaterialResult mat;
-        getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd, ray, mat);
+        getMatResult(optixLaunchParams.mats[prd.hitInfo.mat], prd.hitInfo, mat);
 
         // Add emission
         result += mat.emission;
@@ -446,7 +372,7 @@ __inline__ __device__ owl::vec3f LiRISDirect(owl::Ray &ray, Record &prd, float p
         // Generate 2 BRDF samples
         owl::vec3f brdfDirOut1, brdfDirOut2;
         float brdfPdf1, brdfPdf2, brdfPdf1NEE, brdfPdf2NEE;
-        Record brdfRecord1, brdfRecord2;
+        RayInfo brdfRecord1, brdfRecord2;
         sampleMat(mat, dirIn, {prd.random(), prd.random(), prd.random()}, brdfDirOut1);
         sampleMat(mat, dirIn, {prd.random(), prd.random(), prd.random()}, brdfDirOut2);
 
@@ -458,22 +384,25 @@ __inline__ __device__ owl::vec3f LiRISDirect(owl::Ray &ray, Record &prd, float p
         brdfPdf1NEE = pdfLightExpensive(brdfRay1, brdfRecord1);
         brdfPdf2NEE = pdfLightExpensive(brdfRay2, brdfRecord2);
 
-        brdfRecord1.emitted = (brdfRecord1.intersectEvent == RayScattered)
+        brdfRecord1.hitInfo.emitted = (brdfRecord1.hitInfo.intersectEvent == RayScattered)
                                   ? optixLaunchParams.mats[brdfRecord1.hitInfo.mat].emission
                                   : 0.f;
-        brdfRecord2.emitted = (brdfRecord2.intersectEvent == RayScattered)
+        brdfRecord2.hitInfo.emitted = (brdfRecord2.hitInfo.intersectEvent == RayScattered)
                                   ? optixLaunchParams.mats[brdfRecord2.hitInfo.mat].emission
                                   : 0.f;
 
         // Generate 2 NEE samples
-        ScatterRecord lightSample1, lightSample2;
+        LightSampleInfo lightSample1, lightSample2;
         float lightPdf1 = 0.f, lightPdf2 = 0.f, lightPdf1BRDF, lightPdf2BRDF;
-        Record lightRecord1, lightRecord2;
+        RayInfo lightRecord1, lightRecord2;
         sampleLight(prd.hitInfo.p, {prd.random(), prd.random(), prd.random()}, lightSample1);
         sampleLight(prd.hitInfo.p, {prd.random(), prd.random(), prd.random()}, lightSample2);
 
-        owl::Ray lightRay1(prd.hitInfo.p, lightSample1.dir, RAY_EPS, RAY_MAX);
-        owl::Ray lightRay2(prd.hitInfo.p, lightSample2.dir, RAY_EPS, RAY_MAX);
+        const owl::vec3f lightDir1 = normalize(lightSample1.p - prd.hitInfo.p);
+        const owl::vec3f lightDir2 = normalize(lightSample2.p - prd.hitInfo.p);
+
+        owl::Ray lightRay1(prd.hitInfo.p, lightDir1, RAY_EPS, RAY_MAX);
+        owl::Ray lightRay2(prd.hitInfo.p, lightDir2, RAY_EPS, RAY_MAX);
 
         bool visible1 = visiblityExpensive(lightRay1, lightSample1.primI, prd.hitInfo.sn, lightRecord1);
         bool visible2 = visiblityExpensive(lightRay2, lightSample2.primI, prd.hitInfo.sn, lightRecord2);
@@ -481,12 +410,12 @@ __inline__ __device__ owl::vec3f LiRISDirect(owl::Ray &ray, Record &prd, float p
         lightPdf2 = lightSample2.pdf;
 
         lightPdf1BRDF =
-            pdfMat(mat, dirIn, onb.toLocal(lightSample1.dir), normalize(dirIn + onb.toLocal(lightSample1.dir)));
+            pdfMat(mat, dirIn, onb.toLocal(lightDir1), normalize(dirIn + onb.toLocal(lightDir1)));
         lightPdf2BRDF =
-            pdfMat(mat, dirIn, onb.toLocal(lightSample2.dir), normalize(dirIn + onb.toLocal(lightSample2.dir)));
+            pdfMat(mat, dirIn, onb.toLocal(lightDir2), normalize(dirIn + onb.toLocal(lightDir2)));
 
-        lightRecord1.emitted = optixLaunchParams.mats[lightRecord1.hitInfo.mat].emission;
-        lightRecord2.emitted = optixLaunchParams.mats[lightRecord2.hitInfo.mat].emission;
+        lightRecord1.hitInfo.emitted = optixLaunchParams.mats[lightRecord1.hitInfo.mat].emission;
+        lightRecord2.hitInfo.emitted = optixLaunchParams.mats[lightRecord2.hitInfo.mat].emission;
 
         // Compute MIS weights
         float m0 = multiPowerHeuristic(nBRDF, brdfPdf1, nNEE, brdfPdf1NEE, power);
@@ -496,14 +425,14 @@ __inline__ __device__ owl::vec3f LiRISDirect(owl::Ray &ray, Record &prd, float p
 
         // Compute target function
         float p0 =
-            luminance(evalMat(mat, dirIn, brdfDirOut1, normalize(dirIn + brdfDirOut1)) * brdfRecord1.emitted);
+            luminance(evalMat(mat, dirIn, brdfDirOut1, normalize(dirIn + brdfDirOut1)) * brdfRecord1.hitInfo.emitted);
         float p1 =
-            luminance(evalMat(mat, dirIn, brdfDirOut2, normalize(dirIn + brdfDirOut2)) * brdfRecord2.emitted);
-        float p2 = (visible1) ? luminance(evalMat(mat, dirIn, onb.toLocal(lightSample1.dir), normalize(dirIn + onb.toLocal(lightSample1.dir))) *
-            lightRecord1.emitted) : 0.f;
+            luminance(evalMat(mat, dirIn, brdfDirOut2, normalize(dirIn + brdfDirOut2)) * brdfRecord2.hitInfo.emitted);
+        float p2 = (visible1) ? luminance(evalMat(mat, dirIn, onb.toLocal(lightDir1), normalize(dirIn + onb.toLocal(lightDir1))) *
+            lightRecord1.hitInfo.emitted) : 0.f;
         float p3 = (visible2) ? luminance(
-            evalMat(mat, dirIn, onb.toLocal(lightSample2.dir), normalize(dirIn + onb.toLocal(lightSample2.dir))) *
-            lightRecord2.emitted) : 0.f;
+            evalMat(mat, dirIn, onb.toLocal(lightDir2), normalize(dirIn + onb.toLocal(lightDir2))) *
+            lightRecord2.hitInfo.emitted) : 0.f;
 
         // Compute RIS weights
         // pHat is just f for now (cos-weighted BRDF * emitted)
@@ -525,30 +454,30 @@ __inline__ __device__ owl::vec3f LiRISDirect(owl::Ray &ray, Record &prd, float p
         } else if (sampleIndex == 2) {
             W = sumWeights / p2;
             result += W *
-                      evalMat(mat, dirIn, onb.toLocal(lightSample1.dir),
-                              normalize(dirIn + onb.toLocal(lightSample1.dir))) *
-                      lightRecord1.emitted;
+                      evalMat(mat, dirIn, onb.toLocal(lightDir1),
+                              normalize(dirIn + onb.toLocal(lightDir1))) *
+                      lightRecord1.hitInfo.emitted;
         } else if (sampleIndex == 3) {
             W = sumWeights / p3;
             result += W *
-                      evalMat(mat, dirIn, onb.toLocal(lightSample2.dir),
-                              normalize(dirIn + onb.toLocal(lightSample2.dir))) *
-                      lightRecord2.emitted;
+                      evalMat(mat, dirIn, onb.toLocal(lightDir2),
+                              normalize(dirIn + onb.toLocal(lightDir2))) *
+                      lightRecord2.hitInfo.emitted;
         }
-    } else if (prd.intersectEvent == RayMissed) {
-        result += prd.emitted;
+    } else if (prd.hitInfo.intersectEvent == RayMissed) {
+        result += prd.hitInfo.emitted;
     }
     return result;
 }
 
 /// Ray generation shader
 OPTIX_RAYGEN_PROGRAM(RayGen)() {
-    const RayGenData &self = owl::getProgramData<RayGenData>();
+    const auto &self = owl::getProgramData<RayGenData>();
     const owl::vec2i pixelId = owl::getLaunchIndex();
     const int pboOffset = pixelId.x + self.pboSize.x * pixelId.y;
 
     // Initialize record
-    Record prd;
+    RayInfo prd;
     prd.random.init(pboOffset, optixLaunchParams.frame.id);
 
     // Color @ pixel
@@ -557,7 +486,7 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
         const owl::vec2f pixelOffset(prd.random(), prd.random());
         const owl::vec2f uv = (owl::vec2f(pixelId) + pixelOffset);
         const owl::vec2f lensSample = {prd.random(), prd.random()};
-        owl::Ray ray = generateRay(uv.x, uv.y, lensSample);
+        owl::Ray ray = generateRay(optixLaunchParams.camera, uv.x, uv.y, lensSample);
         if (optixLaunchParams.camera.integrator == 0) {
             color += Li(ray, prd);
         } else if (optixLaunchParams.camera.integrator == 1) {
@@ -594,11 +523,11 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
 
 OPTIX_MISS_PROGRAM(Miss)() {
     // const MissProgData &self = owl::getProgramData<MissProgData>();
-    Record &prd = owl::getPRD<Record>();
+    RayInfo &prd = owl::getPRD<RayInfo>();
 
     // owl::vec3f dir = optixGetWorldRayDirection();
 
     // For now, grey background
-    prd.emitted = 0.f;
-    prd.intersectEvent = RayMissed;
+    prd.hitInfo.emitted = 0.f;
+    prd.hitInfo.intersectEvent = RayMissed;
 }

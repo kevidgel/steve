@@ -111,7 +111,7 @@ __inline__ __device__ void getTexResult4f(const bool hasTex, const cudaTextureOb
 }
 
 /// Evaluate texture sampling
-__inline__ __device__ void getMatResult(const Material &mat, Record &record, owl::Ray& ray, MaterialResult &matResult) {
+__inline__ __device__ void getMatResult(const Material &mat, const HitInfo &hit, MaterialResult &matResult) {
     matResult.metallic = mat.metallic;
     matResult.subsurface = mat.subsurface;
     matResult.specular = mat.specular;
@@ -125,9 +125,9 @@ __inline__ __device__ void getMatResult(const Material &mat, Record &record, owl
     matResult.baseColor = mat.baseColor;
     matResult.emission = mat.emission;
     matResult.alpha = 1.f;
-    matResult.etaInOverOut = dot(ray.direction, record.hitInfo.gn) < 0.f ? 1.0f / mat.ior : mat.ior;
+    matResult.etaInOverOut = dot(hit.dirIn,  hit.gn) < 0.f ? 1.0f / mat.ior : mat.ior;
 
-    const owl::vec2f &uv = record.hitInfo.uv;
+    const owl::vec2f &uv = hit.uv;
     getTexResult1f(mat.hasMetallicTex, mat.metallicTex, uv.u, uv.v, matResult.metallic);
     getTexResult1f(mat.hasSpecularTex, mat.specularTex, uv.u, uv.v, matResult.specular);
     getTexResult1f(mat.hasRoughnessTex, mat.roughnessTex, uv.u, uv.v, matResult.roughness);
@@ -153,23 +153,23 @@ __inline__ __device__ void getMatResult(const Material &mat, Record &record, owl
     }
 
     // Bump mapping
-    if (mat.hasBumpTex) {
-        float h, hU, hD, hL, hR;
-        const float scale = 0.01f;
-        const float delta = 0.001f;
-        const float delta2 = 0.002f;
-        getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u, uv.v, h);
-        getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u + delta, uv.v, hU);
-        getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u - delta, uv.v, hD);
-        getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u, uv.v + delta, hL);
-        getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u, uv.v - delta, hR);
-
-        float dHdU = scale * (hU - hD) / delta2;
-        float dHdV = scale * (hL - hR) / delta2;
-        const owl::vec3f bn = normalize(owl::vec3f(-dHdU, -dHdV, 1.f));
-        ONB onb(record.hitInfo.sn);
-        record.hitInfo.sn = normalize(onb.toWorld(bn));
-    }
+    // if (mat.hasBumpTex) {
+    //     float h, hU, hD, hL, hR;
+    //     const float scale = 0.01f;
+    //     const float delta = 0.001f;
+    //     const float delta2 = 0.002f;
+    //     getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u, uv.v, h);
+    //     getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u + delta, uv.v, hU);
+    //     getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u - delta, uv.v, hD);
+    //     getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u, uv.v + delta, hL);
+    //     getTexResult1f(mat.hasBumpTex, mat.bumpTex, uv.u, uv.v - delta, hR);
+    //
+    //     float dHdU = scale * (hU - hD) / delta2;
+    //     float dHdV = scale * (hL - hR) / delta2;
+    //     const owl::vec3f bn = normalize(owl::vec3f(-dHdU, -dHdV, 1.f));
+    //     ONB onb(hit.sn);
+    //     hit.sn = normalize(onb.toWorld(bn));
+    // }
 
     matResult.clearcoatGloss = owl::clamp(matResult.clearcoatGloss, 0.f, 1.f);
     matResult.clearcoat = owl::clamp(matResult.clearcoat, 0.f, 1.f);
@@ -504,7 +504,8 @@ __inline__ __device__ owl::vec3f evalMat(const MaterialResult &mat, const owl::v
     const owl::vec3f sheen = mat.sheenWeight * evalSheen(mat, dirIn, dirOut, half);
     const owl::vec3f metal = mat.metalWeight * evalMetal(mat, dirIn, dirOut, half);
     const owl::vec3f clearcoat = mat.clearcoatWeight * evalClearcoat(mat, dirIn, dirOut, half);
-    return (diffuse + metal + sheen + clearcoat);
+    const owl::vec3f sum = diffuse + sheen + metal + clearcoat;
+    return sum;
     // return evalMetal(mat, dirIn, dirOut, half);
     // return evalLambertian(mat, dirIn, dirOut);
 }

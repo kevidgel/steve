@@ -53,16 +53,28 @@ class Render {
 
     struct {
         OWLContext ctx;
-        OWLModule module; // Eventually we want more modules
-        OWLRayGen rayGen;
-        OWLMissProg missProg;
+        // ReSTIR Lighting shader
+        OWLModule reSTIRModule;
+        OWLRayGen reSTIRRayGen;
+        OWLMissProg reSTIRMissProg;
+        // Lighting shader
+        OWLModule lightingModule;
+        OWLRayGen lightingRayGen;
+        OWLMissProg lightingMissProg;
+        // GeometryPass Shader
+        OWLModule gBufferModule;
+        OWLRayGen gBufferRayGen;
+        OWLMissProg gBufferMissProg;
+        OWLBuffer gBuffer[2];
+        // Launch Params
         OWLParams launchParams;
-        OWLGeomType mesh;
         OWLBuffer launchParamsBuffer;
+        OWLBuffer reservoir[2];
+        // Geometry
+        OWLGeomType mesh;
         OWLGeom triMeshGeom;
         OWLGroup triMeshGroup;
         OWLGroup world;
-        OWLBuffer cameraBuffer;
         OWLBuffer vertsBuffer;
         OWLBuffer vertsIBuffer;
         OWLBuffer normsBuffer;
@@ -75,12 +87,14 @@ class Render {
         OWLBuffer lightsPrimsIBuffer;
         OWLBuffer matsIBuffer;
         OWLBuffer texturesBuffer;
+        // Env map
         OWLTexture envMap;
     } owl{};
 
     Frame frame{};
     Camera camera{};
     Camera oldCamera{};
+    int curReservoir = 0;
     MaterialBuffer materialBuffer{};
     bool accumFrames = false;
 

@@ -1,4 +1,4 @@
-#include "../../include/pathtracer/host/parser.hpp"
+#include "pathtracer/host/parser.hpp"
 #include "fstream"
 
 #include <spdlog/spdlog.h>
