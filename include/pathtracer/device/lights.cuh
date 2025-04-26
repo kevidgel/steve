@@ -40,6 +40,7 @@ __inline__ __device__ void sampleLight(const owl::vec3f &p, const owl::vec3f &sa
     scatter.gn = norm;
     scatter.p = lightP;
     scatter.primI = lights.primsI[lightI];
+    scatter.emission = lights.emission[lightI];
     scatter.pdf = (dist2) / (lights.size * area * cos);
     scatter.areaPdf = 1.f / (lights.size * area);
 }

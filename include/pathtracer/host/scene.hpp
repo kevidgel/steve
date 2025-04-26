@@ -27,6 +27,7 @@ class SceneBuffer {
     // Lights
     std::vector<owl::vec3f> lightVerts;
     std::vector<owl::vec3ui> lightVertsI;
+    std::vector<owl::vec3f> lightEmission;
     std::vector<uint> lightPrimsI;
 
     // Materials

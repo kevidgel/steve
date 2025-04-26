@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "material_defs.cuh"
 #include "owl/common/math/vec.h"
 
 typedef enum {
@@ -29,5 +30,6 @@ struct HitInfo {
 
 struct GBufferInfo {
     HitInfo hitInfo;
+    MaterialResult mat;
     owl::vec2f motion;
 };

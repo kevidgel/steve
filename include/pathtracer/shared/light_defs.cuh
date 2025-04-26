@@ -10,6 +10,7 @@
 struct LightSampleInfo {
     owl::vec3f p;
     owl::vec3f gn;
+    owl::vec3f emission; // NOTE!!! empty until visibility test
     float pdf; // NOTE!!! w.r.t solid angle!!!! We may have to change this.
     float areaPdf;
     uint primI; // ID in global buffer (NOT in lights buffer)

@@ -1,11 +1,12 @@
 #include "pathtracer/host/render.hpp"
+#include "ImGuizmo.h"
+#include "gbuffer.ptx.hpp"
 #include "glm/glm.hpp"
 #include "imgui.h"
-#include "ImGuizmo.h"
 #include "integrator.ptx.hpp"
-#include "restir_integrator.ptx.hpp"
-#include "gbuffer.ptx.hpp"
 #include "pathtracer/host/texture.hpp"
+#include "temporal.ptx.hpp"
+#include "spatial.ptx.hpp"
 
 #include <cuda_gl_interop.h>
 #include <spdlog/spdlog.h>
@@ -157,9 +158,14 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
 
     // Initialize OWL
     owl.ctx = owlContextCreate(nullptr, 1);
-    owl.lightingModule = owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::integrator_ptx_source));
-    owl.gBufferModule = owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::gbuffer_ptx_source));
-    owl.reSTIRModule = owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::restir_integrator_ptx_source));
+    owl.lightingModule =
+        owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::integrator_ptx_source));
+    owl.gBufferModule =
+        owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::gbuffer_ptx_source));
+    owl.temporalReSTIRModule =
+        owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::temporal_ptx_source));
+    owl.spatialReSTIRModule =
+        owlModuleCreate(owl.ctx, reinterpret_cast<const char *>(ShaderSources::spatial_ptx_source));
 
     // Initialize geometries (Only triangles for now)
     OWLVarDecl triMeshVars[] = {
@@ -179,7 +185,8 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     // Set closest hit program for triangle mesh
     owlGeomTypeSetClosestHit(owl.mesh, 0, owl.lightingModule, "TriangleMesh");
     owlGeomTypeSetClosestHit(owl.mesh, 0, owl.gBufferModule, "TriangleMesh");
-    owlGeomTypeSetClosestHit(owl.mesh, 0, owl.reSTIRModule, "TriangleMesh");
+    owlGeomTypeSetClosestHit(owl.mesh, 0, owl.temporalReSTIRModule, "TriangleMesh");
+    owlGeomTypeSetClosestHit(owl.mesh, 0, owl.spatialReSTIRModule, "TriangleMesh");
 
     // Build shader programs for geometries
     owlBuildPrograms(owl.ctx);
@@ -225,18 +232,22 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         owlDeviceBufferCreate(owl.ctx, OWL_FLOAT3, scene->lightVerts.size(), scene->lightVerts.data());
     owl.lightsVertsIBuffer =
         owlDeviceBufferCreate(owl.ctx, OWL_UINT3, scene->lightVertsI.size(), scene->lightVertsI.data());
+    owl.lightsEmissionBuffer =
+        owlDeviceBufferCreate(owl.ctx, OWL_FLOAT3, scene->lightEmission.size(), scene->lightEmission.data());
     owl.lightsPrimsIBuffer =
         owlDeviceBufferCreate(owl.ctx, OWL_UINT, scene->lightPrimsI.size(), scene->lightPrimsI.data());
 
     // Create gBuffer + reservoirs
     owl.gBuffer[0] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(GBufferInfo),
-                                             camera.resolution.x * camera.resolution.y, nullptr);
+                                           camera.resolution.x * camera.resolution.y, nullptr);
     owl.gBuffer[1] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(GBufferInfo),
-                                             camera.resolution.x * camera.resolution.y, nullptr);
+                                           camera.resolution.x * camera.resolution.y, nullptr);
     owl.reservoir[0] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Reservoir),
                                              camera.resolution.x * camera.resolution.y, nullptr);
     owl.reservoir[1] = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Reservoir),
                                              camera.resolution.x * camera.resolution.y, nullptr);
+    owl.spatialReservoir = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Reservoir),
+                                                 camera.resolution.x * camera.resolution.y, nullptr);
 
     // Create launch params
     OWLVarDecl launchParamsVars[] = {
@@ -265,6 +276,7 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {"mats", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, mats)},
         {"lights.verts", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, lights.verts)},
         {"lights.vertsI", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, lights.vertsI)},
+        {"lights.emission", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, lights.emission)},
         {"lights.primsI", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, lights.primsI)},
         {"lights.size", OWL_UINT, OWL_OFFSETOF(LaunchParams, lights.size)},
         {"curReservoir", OWL_UINT, OWL_OFFSETOF(LaunchParams, curReservoir)},
@@ -272,6 +284,7 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {"gBuffer1", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, gBuffer1)},
         {"reservoir0", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, reservoir0)},
         {"reservoir1", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, reservoir1)},
+        {"spatialReservoir", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, spatialReservoir)},
         {nullptr},
     };
 
@@ -302,6 +315,7 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owlParamsSetBuffer(owl.launchParams, "mats", owl.matsBuffer);
     owlParamsSetBuffer(owl.launchParams, "lights.verts", owl.lightsVertsBuffer);
     owlParamsSetBuffer(owl.launchParams, "lights.vertsI", owl.lightsVertsIBuffer);
+    owlParamsSetBuffer(owl.launchParams, "lights.emission", owl.lightsEmissionBuffer);
     owlParamsSetBuffer(owl.launchParams, "lights.primsI", owl.lightsPrimsIBuffer);
     owlParamsSet1ui(owl.launchParams, "lights.size", scene->lightVertsI.size());
     owlParamsSet1ui(owl.launchParams, "curReservoir", 0);
@@ -309,6 +323,7 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owlParamsSetBuffer(owl.launchParams, "gBuffer1", owl.gBuffer[1]);
     owlParamsSetBuffer(owl.launchParams, "reservoir0", owl.reservoir[0]);
     owlParamsSetBuffer(owl.launchParams, "reservoir1", owl.reservoir[1]);
+    owlParamsSetBuffer(owl.launchParams, "spatialReservoir", owl.spatialReservoir);
 
     // Create miss program
     OWLVarDecl missProgVars[] = {
@@ -318,27 +333,38 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {nullptr},
     };
 
-    owl.lightingMissProg = owlMissProgCreate(owl.ctx, owl.lightingModule, "Miss", sizeof(MissProgData), missProgVars, -1);
+    owl.lightingMissProg =
+        owlMissProgCreate(owl.ctx, owl.lightingModule, "Miss", sizeof(MissProgData), missProgVars, -1);
     owlMissProgSet3f(owl.lightingMissProg, "envColor", {0.8f, 0.8f, 0.8f});
     owlMissProgSet1b(owl.lightingMissProg, "hasEnvMap", (owl.envMap != nullptr));
     owlMissProgSetTexture(owl.lightingMissProg, "envMap", owl.envMap);
 
-    owl.reSTIRMissProg = owlMissProgCreate(owl.ctx, owl.reSTIRModule, "Miss2", sizeof(MissProgData), missProgVars, -1);
-    owlMissProgSet3f(owl.reSTIRMissProg, "envColor", {0.8f, 0.8f, 0.8f});
-    owlMissProgSet1b(owl.reSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
-    owlMissProgSetTexture(owl.reSTIRMissProg, "envMap", owl.envMap);
+    owl.temporalReSTIRMissProg =
+        owlMissProgCreate(owl.ctx, owl.temporalReSTIRModule, "Miss2", sizeof(MissProgData), missProgVars, -1);
+    owlMissProgSet3f(owl.temporalReSTIRMissProg, "envColor", {0.8f, 0.8f, 0.8f});
+    owlMissProgSet1b(owl.temporalReSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    owlMissProgSetTexture(owl.temporalReSTIRMissProg, "envMap", owl.envMap);
 
-    owl.gBufferMissProg = owlMissProgCreate(owl.ctx, owl.gBufferModule, "Miss", sizeof(MissProgData), missProgVars, -1);
+    owl.spatialReSTIRMissProg =
+        owlMissProgCreate(owl.ctx, owl.spatialReSTIRModule, "Miss2", sizeof(MissProgData), missProgVars, -1);
+    owlMissProgSet3f(owl.spatialReSTIRMissProg, "envColor", {0.8f, 0.8f, 0.8f});
+    owlMissProgSet1b(owl.spatialReSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    owlMissProgSetTexture(owl.spatialReSTIRMissProg, "envMap", owl.envMap);
+
+    owl.gBufferMissProg =
+        owlMissProgCreate(owl.ctx, owl.gBufferModule, "Miss", sizeof(MissProgData), missProgVars, -1);
     owlMissProgSet3f(owl.gBufferMissProg, "envColor", {0.8f, 0.8f, 0.8f});
     owlMissProgSet1b(owl.gBufferMissProg, "hasEnvMap", (owl.envMap != nullptr));
     owlMissProgSetTexture(owl.gBufferMissProg, "envMap", owl.envMap);
+
 
     OWLVarDecl geometryPassVars[] = {
         {"pboSize", OWL_INT2, OWL_OFFSETOF(GeometryPassData, pboSize)},
         {nullptr}
     };
 
-    owl.gBufferRayGen = owlRayGenCreate(owl.ctx, owl.gBufferModule, "GeometryPass", sizeof(GeometryPassData), geometryPassVars, -1);
+    owl.gBufferRayGen = owlRayGenCreate(owl.ctx, owl.gBufferModule, "GeometryPass", sizeof(GeometryPassData),
+                                        geometryPassVars, -1);
     owlRayGenSet2i(owl.gBufferRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
 
     OWLVarDecl rayGenVars[] = {
@@ -347,13 +373,21 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {nullptr}
     };
 
-    owl.lightingRayGen = owlRayGenCreate(owl.ctx, owl.lightingModule, "RayGen", sizeof(RayGenData), rayGenVars, -1);
+    owl.lightingRayGen =
+        owlRayGenCreate(owl.ctx, owl.lightingModule, "RayGen", sizeof(RayGenData), rayGenVars, -1);
     owlRayGenSetPointer(owl.lightingRayGen, "pboPtr", devPboPtr);
     owlRayGenSet2i(owl.lightingRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
 
-    owl.reSTIRRayGen = owlRayGenCreate(owl.ctx, owl.reSTIRModule, "RayGen", sizeof(RayGenData), rayGenVars, -1);
-    owlRayGenSetPointer(owl.reSTIRRayGen, "pboPtr", devPboPtr);
-    owlRayGenSet2i(owl.reSTIRRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
+
+    owl.temporalReSTIRRayGen =
+        owlRayGenCreate(owl.ctx, owl.temporalReSTIRModule, "RayGen", sizeof(RayGenData), rayGenVars, -1);
+    owlRayGenSetPointer(owl.temporalReSTIRRayGen, "pboPtr", devPboPtr);
+    owlRayGenSet2i(owl.temporalReSTIRRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
+
+    owl.spatialReSTIRRayGen =
+        owlRayGenCreate(owl.ctx, owl.spatialReSTIRModule, "RayGen", sizeof(RayGenData), rayGenVars, -1);
+    owlRayGenSetPointer(owl.spatialReSTIRRayGen, "pboPtr", devPboPtr);
+    owlRayGenSet2i(owl.spatialReSTIRRayGen, "pboSize", camera.resolution.x, camera.resolution.y);
 
     spdlog::info("Building programs, pipeline, and SBT...");
     owlBuildPrograms(owl.ctx);
@@ -541,7 +575,9 @@ void Render::render() {
     if (camera.integrator == 6) {
         owlLaunch2D(owl.gBufferRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
         cudaDeviceSynchronize();
-        owlLaunch2D(owl.reSTIRRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
+        owlLaunch2D(owl.temporalReSTIRRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
+        cudaDeviceSynchronize();
+        owlLaunch2D(owl.spatialReSTIRRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
         cudaDeviceSynchronize();
     } else {
         owlLaunch2D(owl.lightingRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);

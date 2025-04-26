@@ -48,6 +48,7 @@ struct LaunchParams {
     GBufferInfo *gBuffer1;
     Reservoir *reservoir0;
     Reservoir *reservoir1;
+    Reservoir *spatialReservoir;
 };
 
 // Store primary hit information

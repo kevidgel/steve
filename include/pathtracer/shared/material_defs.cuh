@@ -12,6 +12,31 @@ __inline__ __host__ __device__ float luminance(const owl::vec3f &c) {
     return c.x * 0.212671f + c.y * 0.715160f + c.z * 0.072169f;
 }
 
+/// Evaluated material
+struct MaterialResult {
+    owl::vec3f baseColor;
+    owl::vec3f emission;
+    float specularTransmission;
+    float metallic;
+    float subsurface;
+    float specular;
+    float roughness;
+    float specularTint;
+    float anisotropic;
+    float sheen;
+    float sheenTint;
+    float clearcoat;
+    float clearcoatGloss;
+    float etaInOverOut;
+    float alpha;
+
+    float diffuseWeight;
+    float sheenWeight;
+    float clearcoatWeight;
+    float metalWeight;
+    float sumWeights;
+};
+
 struct Material {
     bool hasMetallicTex;
     // no subsurfaceTex

@@ -10,7 +10,6 @@
 #include "ray.cuh"
 #include "sampling.cuh"
 
-#include <bits/algorithmfwd.h>
 #include <cuda_runtime.h>
 
 #define INV_PI 0.31830988618379067154f
@@ -36,31 +35,6 @@ struct ONB {
     owl::vec3f u;
     owl::vec3f v;
     owl::vec3f w;
-};
-
-/// Evaluated material
-struct MaterialResult {
-    owl::vec3f baseColor;
-    owl::vec3f emission;
-    float specularTransmission;
-    float metallic;
-    float subsurface;
-    float specular;
-    float roughness;
-    float specularTint;
-    float anisotropic;
-    float sheen;
-    float sheenTint;
-    float clearcoat;
-    float clearcoatGloss;
-    float etaInOverOut;
-    float alpha;
-
-    float diffuseWeight;
-    float sheenWeight;
-    float clearcoatWeight;
-    float metalWeight;
-    float sumWeights;
 };
 
 __inline__ __device__ owl::vec3f reflect(const owl::vec3f &v, const owl::vec3f &n) {

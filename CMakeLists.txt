@@ -31,7 +31,8 @@ add_subdirectory(ext/tinygltf)
 # Trace PTX compilation
 enable_language(CUDA)
 set(trace_srcs
-        src/pathtracer/device/restir_integrator.cu
+        src/pathtracer/device/spatial.cu
+        src/pathtracer/device/temporal.cu
         src/pathtracer/device/integrator.cu
         src/pathtracer/device/gbuffer.cu
 )
@@ -39,6 +40,7 @@ set(trace_headers
         include/pathtracer/device/integrator.cuh
         include/pathtracer/device/geometry.cuh
         include/pathtracer/device/reservoir.cuh
+        include/pathtracer/device/restir.cuh
         include/pathtracer/device/ray.cuh
         include/pathtracer/device/material.cuh
         include/pathtracer/device/sampling.cuh

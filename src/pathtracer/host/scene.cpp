@@ -215,6 +215,7 @@ void SceneBuffer::loadGltf(const std::filesystem::path &filename, bool isBinary)
         int material_id = matsI[offsetMat];
         if (luminance(materialBuffer.mats[material_id].emission) > 0.01f) {
             lightPrimsI.push_back((int)offsetMat);
+            lightEmission.push_back(materialBuffer.mats[material_id].emission);
         }
     }
 
@@ -315,8 +316,9 @@ void SceneBuffer::loadObj(const std::filesystem::path &filename) {
     for (const auto &shape : scene.shapes) {
         for (int material_id : shape.mesh.material_ids) {
             matsI[offsetMat] = material_id;
-            if (luminance(materialBuffer.mats[material_id].emission) > 0.01f) {
+            if (luminance(materialBuffer.mats[material_id].emission) > 0.f) {
                 lightPrimsI.push_back((int)offsetMat);
+                lightEmission.push_back(materialBuffer.mats[material_id].emission);
             }
             ++offsetMat;
         }

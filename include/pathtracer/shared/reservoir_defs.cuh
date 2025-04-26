@@ -10,6 +10,7 @@
 struct Reservoir {
     bool valid;
     LightSampleInfo sample;
-    float sumWeights;
+    float wSum;
+    float W;
     uint count;
 };

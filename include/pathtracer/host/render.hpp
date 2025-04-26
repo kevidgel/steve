@@ -53,10 +53,14 @@ class Render {
 
     struct {
         OWLContext ctx;
-        // ReSTIR Lighting shader
-        OWLModule reSTIRModule;
-        OWLRayGen reSTIRRayGen;
-        OWLMissProg reSTIRMissProg;
+        // ReSTIR temporal resampling shader
+        OWLModule temporalReSTIRModule;
+        OWLRayGen temporalReSTIRRayGen;
+        OWLMissProg temporalReSTIRMissProg;
+        // ReSTIR spatial resampling shader
+        OWLModule spatialReSTIRModule;
+        OWLRayGen spatialReSTIRRayGen;
+        OWLMissProg spatialReSTIRMissProg;
         // Lighting shader
         OWLModule lightingModule;
         OWLRayGen lightingRayGen;
@@ -70,6 +74,7 @@ class Render {
         OWLParams launchParams;
         OWLBuffer launchParamsBuffer;
         OWLBuffer reservoir[2];
+        OWLBuffer spatialReservoir;
         // Geometry
         OWLGeomType mesh;
         OWLGeom triMeshGeom;
@@ -84,6 +89,7 @@ class Render {
         OWLBuffer matsBuffer;
         OWLBuffer lightsVertsBuffer;
         OWLBuffer lightsVertsIBuffer;
+        OWLBuffer lightsEmissionBuffer;
         OWLBuffer lightsPrimsIBuffer;
         OWLBuffer matsIBuffer;
         OWLBuffer texturesBuffer;

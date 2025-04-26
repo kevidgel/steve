@@ -10,6 +10,7 @@
 struct LightsMesh {
     owl::vec3f *verts;
     owl::vec3ui *vertsI;
+    owl::vec3f *emission;
     uint *primsI; // Global primitive ids
     uint size;
 };
