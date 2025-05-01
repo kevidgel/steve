@@ -124,6 +124,7 @@ set(steve_headers
         include/pathtracer/shared/geometry_defs.cuh
         include/pathtracer/shared/reservoir_defs.cuh
         include/utils/shader.hpp
+        ext/ImGuiFileDialog/ImGuiFileDialog.h
 )
 
 set(steve_srcs
@@ -135,6 +136,7 @@ set(steve_srcs
         src/pathtracer/host/parser.cpp
         src/pathtracer/host/material_buffer.cpp
         src/utils/shader.cpp
+        ext/ImGuiFileDialog/ImGuiFileDialog.cpp
 )
 
 # Compile library
@@ -152,6 +154,7 @@ target_include_directories(steve_lib PUBLIC
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
         ${OptiX_ROOT_DIR}/include
         ${Stb_INCLUDE_DIR}
+        ext/ImGuiFileDialog/
 )
 
 target_link_libraries(steve_lib PRIVATE

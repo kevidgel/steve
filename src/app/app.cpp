@@ -25,7 +25,7 @@ int main(int argc, char* argv[]) {
         Display display;
 
         spdlog::info("Setting up pathtracer...");
-        auto pathtracer = std::make_shared<Render>(std::move(result.scene), std::move(result.camera), "");
+        auto pathtracer = std::make_shared<Render>(std::move(result.scene), std::move(result.camera), result.env);
 
         display.attachRenderer(pathtracer);
         display.start();

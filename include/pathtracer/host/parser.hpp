@@ -14,6 +14,7 @@ using json = nlohmann::json;
 struct Result {
     std::unique_ptr<SceneBuffer> scene;
     std::unique_ptr<Camera> camera;
+    std::string env;
 };
 
 /// Parses a file into a usable scene format

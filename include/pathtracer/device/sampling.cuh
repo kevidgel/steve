@@ -28,6 +28,16 @@ __inline__ __device__ owl::vec3f randomCosinePowerHemisphere(float exponent, con
     return {x, y, z};
 }
 
+__inline__ __device__ owl::vec3f randomOnUnitSphere(const owl::vec2f &sample) {
+    float phi = 2.f * M_PI * sample.x;
+    float cosTheta = 2.f * sample.y - 1;
+    float sinTheta = sqrt(1.f - cosTheta * cosTheta);
+    float x = cos(phi) * sinTheta;
+    float y = sin(phi) * sinTheta;
+    float z = cosTheta;
+    return {x, y, z};
+}
+
 __inline__ __device__ owl::vec2f randomInUnitDisk(const owl::vec2f &sample) {
     const float r = sqrtf(sample.x);
     const float phi = 2.f * M_PI * sample.y;

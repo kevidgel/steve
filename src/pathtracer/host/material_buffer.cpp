@@ -15,8 +15,15 @@ bool MaterialBuffer::loadTexMtl(const std::filesystem::path &filename, std::stri
     }
     std::replace(relTexPath.begin(), relTexPath.end(), '\\', '/');
     std::filesystem::path texPath = fmt::format("{}/{}", filename.parent_path().string(), relTexPath);
+    std::filesystem::path texPathAbs = relTexPath;
     if (exists(texPath) && is_regular_file(texPath)) {
         auto texResult = loadImageCuda(texPath);
+        if (texResult.has_value()) {
+            tex = texResult.value();
+            hasTex = true;
+        }
+    } else if (exists(texPathAbs) && is_regular_file(texPathAbs)) {
+        auto texResult = loadImageCuda(texPathAbs);
         if (texResult.has_value()) {
             tex = texResult.value();
             hasTex = true;

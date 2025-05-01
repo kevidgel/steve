@@ -2,10 +2,12 @@
 #include "owl/Object.h"
 #include "owl/common/math/vec.h"
 #include "owl/owl.h"
+#include "pathtracer/shared/material_defs.cuh"
 #include "spdlog/spdlog.h"
 #include "stb_image.h"
 
 #include <filesystem>
+#include <numeric>
 #include <optional>
 
 float *getImageData(const std::filesystem::path &filename, int &width, int &height) {
@@ -67,4 +69,77 @@ std::optional<cudaTextureObject_t> loadImageCuda(const std::filesystem::path &fi
 
     stbi_image_free(data);
     return texObj;
+}
+
+std::vector<Alias> buildEnvMapAlias(const std::filesystem::path &filename, int &width, int &height) {
+    float *data = stbi_loadf(filename.string().c_str(), &width, &height, nullptr, 4);
+    if (!data) {
+        throw std::runtime_error("Failed to load env map: " + filename.string());
+    }
+
+    const int N = width * height;
+    std::vector<float> weights(N);
+
+    for (int y = 0; y < height; ++y) {
+        float theta = M_PI * (y + 0.5f) / float(height);
+        float sinTheta = std::sin(theta);
+        for (int x = 0; x < width; ++x) {
+            int idx = y * width + x;
+            owl::vec3f c{data[4 * idx + 0], data[4 * idx + 1], data[4 * idx + 2]};
+            weights[idx] = luminance(c) * sinTheta;
+        }
+    }
+    stbi_image_free(data);
+
+    float sumW = std::accumulate(weights.begin(), weights.end(), 0.0f);
+    std::vector<Alias> table(N);
+    if (sumW <= 0.0f) {
+        // uniform fallback
+        for (int i = 0; i < N; ++i) {
+            table[i].pdf = 1.0f / float(N);
+        }
+    } else {
+        for (int i = 0; i < N; ++i) {
+            table[i].pdf = weights[i] / sumW;
+        }
+    }
+
+    std::vector<float> P(N);
+    std::deque<int> small, large;
+    for (int i = 0; i < N; ++i) {
+        P[i] = table[i].pdf * float(N);
+        if (P[i] < 1.0f) {
+            small.push_back(i);
+        } else {
+            large.push_back(i);
+        }
+    }
+
+    while (!small.empty() && !large.empty()) {
+        int s = small.back();
+        small.pop_back();
+        int l = large.back();
+        large.pop_back();
+
+        table[s].prob = P[s];
+        table[s].alias = l;
+
+        P[l] = P[l] - (1.0f - P[s]);
+        if (P[l] < 1.0f) {
+            small.push_back(l);
+        } else {
+            large.push_back(l);
+        }
+    }
+
+    for (int i : large) {
+        table[i].prob = 1.0f;
+        table[i].alias = i;
+    }
+    for (int i : small) {
+        table[i].prob = 1.0f;
+        table[i].alias = i;
+    }
+
+    return table;
 }

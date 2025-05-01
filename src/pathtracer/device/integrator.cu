@@ -8,7 +8,7 @@
 #include <optix_device.h>
 
 #define SPP 2
-#define MAX_DEPTH 16
+#define MAX_DEPTH 5
 
 __inline__ __device__ float powerHeuristic(float pdf1, float pdf2, float power) {
     const float pow1 = powf(pdf1, power);
@@ -221,23 +221,40 @@ __inline__ __device__ owl::vec3f LiDirect(owl::Ray &ray, RayInfo &prd) {
         const owl::vec3f dirIn = -normalize(onb.toLocal(ray.direction));
 
         // Sample lights
-        LightSampleInfo lightSample;
-        sampleLight(prd.hitInfo.p, {prd.random(), prd.random(), prd.random()}, lightSample);
-        if (lightSample.pdf > 0.f) {
-            const owl::vec3f lightDirOutWorld = normalize(lightSample.p - prd.hitInfo.p);
-            const owl::vec3f lightDirOut = onb.toLocal(lightDirOutWorld);
+        if (optixLaunchParams.lights.size > 0) {
+            LightSampleInfo lightSample;
+            sampleLight(prd.hitInfo.p, {prd.random(), prd.random(), prd.random()}, lightSample);
+            if (lightSample.pdf > 0.f) {
+                const owl::vec3f lightDirOutWorld = normalize(lightSample.p - prd.hitInfo.p);
+                const owl::vec3f lightDirOut = onb.toLocal(lightDirOutWorld);
 
-            // Visibility check
-            owl::Ray lightRay(prd.hitInfo.p, lightDirOutWorld, RAY_EPS, RAY_MAX);
-            RayInfo lightRec;
-            traceRay(optixLaunchParams.world, lightRay, lightRec);
-            if (length(lightRec.hitInfo.p - lightSample.p) >= 0.001f || lightRec.hitInfo.id != lightSample.primI || (dirIn.z * lightDirOut.z) < 0.f) {
-                return 0.f;
+                // Visibility check
+                owl::Ray lightRay(prd.hitInfo.p, lightDirOutWorld, RAY_EPS, RAY_MAX);
+                RayInfo lightRec;
+                traceRay(optixLaunchParams.world, lightRay, lightRec);
+                if (length(lightRec.hitInfo.p - lightSample.p) >= 0.001f || lightRec.hitInfo.id != lightSample.primI || (dirIn.z * lightDirOut.z) < 0.f) {
+                    return 0.f;
+                }
+
+                const owl::vec3f half = normalize(dirIn + lightDirOut);
+                const owl::vec3f eval = evalMat(mat, dirIn, lightDirOut, half);
+                result = (eval / lightSample.pdf) * lightSample.emission;
             }
+        }
 
-            const owl::vec3f half = normalize(dirIn + lightDirOut);
-            const owl::vec3f eval = evalMat(mat, dirIn, lightDirOut, half);
-            result = (eval / lightSample.pdf) * lightSample.emission;
+        if (optixLaunchParams.hasEnvMap) {
+            owl::vec3f envDir = sampleEnvMap({prd.random(), prd.random()});
+            float pdfEnvDir = pdfEnvMap(envDir);
+            if (pdfEnvDir > 0.f) {
+                const owl::vec3f sn_envDir = normalize(onb.toLocal(envDir));
+                owl::Ray envRay(prd.hitInfo.p, envDir, RAY_EPS, RAY_MAX);
+                RayInfo envRec;
+                traceRay(optixLaunchParams.world, envRay, envRec);
+                const owl::vec3f half = normalize(dirIn + sn_envDir);
+                const owl::vec3f eval = evalMat(mat, dirIn, sn_envDir, half);
+                result += (eval / pdfEnvDir) * envRec.hitInfo.emitted;
+                // result += max(dot(prd.hitInfo.sn, normalize(envDir)), 0.f);
+            }
         }
     } else if (prd.hitInfo.intersectEvent == RayMissed) {
         // hit background
@@ -452,7 +469,7 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
     owl::vec3f color(0.f);
     uint spp = SPP;
     if (optixLaunchParams.camera.integrator == 1) {
-        spp = 24;
+        spp = 12;
     }
 
     for (int sampleId = 0; sampleId < spp; ++sampleId) {
@@ -498,9 +515,19 @@ OPTIX_MISS_PROGRAM(Miss)() {
     const MissProgData &self = owl::getProgramData<MissProgData>();
     RayInfo &prd = owl::getPRD<RayInfo>();
 
-    // owl::vec3f dir = optixGetWorldRayDirection();
-
-    // For now, grey background
     prd.hitInfo.emitted = 0.0f;
+    if (optixLaunchParams.hasEnvMap) {
+        owl::vec3f dir = optixGetWorldRayDirection();
+        dir = normalize(dir);
+
+        const float theta = acosf(dir.y);
+        const float phi = atan2f(dir.z, dir.x);
+
+        const float u = (phi + M_PI) * 0.5f * (1.0f / M_PI);
+        const float v = theta * (1.f / M_PI);
+        owl::vec4f tex = tex2D<float4>(optixLaunchParams.envMap, u, 1-v);
+        prd.hitInfo.emitted = {tex.x, tex.y, tex.z};
+    }
+
     prd.hitInfo.intersectEvent = RayMissed;
 }

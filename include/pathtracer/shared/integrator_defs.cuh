@@ -14,6 +14,12 @@
 
 #include <cuda_runtime.h>
 
+struct Alias {
+    float pdf;
+    float prob;
+    int alias;
+};
+
 struct affine3f_ {
     owl::vec3f p;
     owl::vec3f vx;
@@ -49,6 +55,10 @@ struct LaunchParams {
     Reservoir *reservoir0;
     Reservoir *reservoir1;
     Reservoir *spatialReservoir;
+    Alias *alias;
+    owl::vec2i aliasSize;
+    bool hasEnvMap;
+    cudaTextureObject_t envMap;
 };
 
 // Store primary hit information
@@ -64,6 +74,4 @@ struct RayGenData {
 
 struct MissProgData {
     owl::vec3f envColor;
-    bool hasEnvMap;
-    cudaTextureObject_t envMap;
 };

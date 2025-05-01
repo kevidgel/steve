@@ -30,7 +30,7 @@ SceneBuffer::SceneBuffer(const std::filesystem::path &filename) : filename(filen
 
     spdlog::info("Loaded file {}", filename.string());
     spdlog::info("Materials: {}", materialBuffer.mats.size());
-    spdlog::info("Num Triangles: {}", vertsI.size());
+    spdlog::info("Num Triangles: {} {} {}", vertsI.size(), normsI.size(), texCoordsI.size());
     spdlog::info("Num Emissive Triangles: {}", lightVertsI.size());
 }
 

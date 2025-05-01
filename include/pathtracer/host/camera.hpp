@@ -17,7 +17,8 @@ struct Camera {
     owl::vec2i resolution = {512, 512};
     float focalDist = 1.f;
     float apertureRadius = 0.f;
-    int integrator = 0;
+    int integrator = 1;
+    float translateSpeed = 1.f;
 
     [[nodiscard]] owl::affine3f xyaw() const { return owl::affine3f::rotate(transform.l.vy, yaw * M_PIf / 180.f); }
 
@@ -36,7 +37,8 @@ struct Camera {
                                          "BRDF + NEE with MIS (balance)",
                                          "Direct RIS (2 NEE, 2 BSDF)",
                                          "Debug",
-                                         "ReSTIR DI"};
+                                         "ReSTIR DI",
+                                         "ReSTIR DI (Biased)"};
             constexpr int count = IM_ARRAYSIZE(integrators);
             if (ImGui::Combo("Integrator", &current, integrators, count)) {
                 integrator = current;
@@ -74,6 +76,7 @@ struct Camera {
 
         ImGui::InputFloat("Focal Dist.", &focalDist);
         ImGui::InputFloat("Apert. Radius", &apertureRadius);
+        ImGui::InputFloat("Translation Speed", &translateSpeed);
     }
 };
 

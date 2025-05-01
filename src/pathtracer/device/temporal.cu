@@ -1,9 +1,9 @@
+#include "geometry.cuh"
+#include "integrator.cuh"
 #include "lights.cuh"
 #include "material.cuh"
 #include "reservoir.cuh"
 #include "restir.cuh"
-#include "geometry.cuh"
-#include "integrator.cuh"
 
 OPTIX_RAYGEN_PROGRAM(RayGen)() {
     const auto &self = owl::getProgramData<RayGenData>();
@@ -31,8 +31,9 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
         // Next hit info
         RayInfo nextHit;
         nextHit.random.init(pboOffset, optixLaunchParams.frame.id);
+        const owl::vec3f sn_dirIn = onb.toLocal(-hit.dirIn);
 
-        // Temporal reprojection
+        // Temporal reprojection and determine if previous reservoir is valid
         // ts pmo icl ngl
         prevReservoir.valid = false;
         auto p = static_cast<owl::vec2f>(pixelId) - gBuf.motion;
@@ -46,37 +47,69 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
                                               : optixLaunchParams.gBuffer0[prevPboOffset];
             const HitInfo &hitPrev = gBufPrev.hitInfo;
             // GBuffer checks
-            if (fabs(hit.t - hitPrev.t) > 0.1f || hitPrev.mat != hit.mat || dot(hitPrev.sn, hit.sn) < 0.90f ||
-                length(hit.p - hitPrev.p) > 0.1f) {
+            if (hit.mat != hitPrev.mat) {
+                prevReservoir.valid = false;
+            }
+            if (dot(hit.sn, hitPrev.sn) < 0.9f) {
+                prevReservoir.valid = false;
+            }
+            if (fabsf(hitPrev.t / hit.t - 1.f) > 0.1) {
                 prevReservoir.valid = false;
             }
         }
 
+        // prevReservoir.valid = false;
 
-        const int nSamples = (prevReservoir.valid) ? 2 : 24;
         // Init current reservoir
         initReservoir(curReservoir);
-        for (int i = 0; i < nSamples; ++i) {
+        const int nLightSamples = (prevReservoir.valid) ? 2 : 32;
+        const int nBRDFSamples = (prevReservoir.valid) ? 0 : 0;
+        for (int i = 0; i < nLightSamples; ++i) {
             LightSampleInfo lightSample;
             sampleLight(hit.p, {nextHit.random(), nextHit.random(), nextHit.random()}, lightSample);
             owl::vec3f targetPdf = evalTargetPdf(lightSample, hit, mat, onb, true);
-            const float weight = luminance(targetPdf) / lightSample.areaPdf;
+
+            // const float pdfLight = lightSample.pdf;
+            //
+            // owl::vec3f sn_dirOut = normalize(onb.toLocal(lightSample.p - hit.p));
+            // const float pdfBRDF = pdfMat(mat, sn_dirIn, sn_dirOut, normalize(sn_dirIn + sn_dirOut));
+            //
+            // const float m = multiPowerHeuristic(nLightSamples, pdfLight, nBRDFSamples, pdfBRDF, 1);
+
+            const float Wx = 1 / lightSample.areaPdf;
+            const float weight = luminance(targetPdf) * Wx;
             updateReservoir(curReservoir, lightSample, weight, 1, nextHit.random());
         }
 
-        // MERGEEEE
+        for (int i = 0; i < nBRDFSamples; ++i) {
+            owl::vec3f sn_dirOut;
+            LightSampleInfo lightSample;
+            float G;
+            sampleMat(mat, sn_dirIn, {nextHit.random(), nextHit.random(), nextHit.random()}, sn_dirOut);
+            owl::vec3f targetPdf = evalTargetPdfBRDF(sn_dirIn, sn_dirOut, hit, mat, onb, lightSample, G);
+            const float pdfBRDF = pdfMat(mat, sn_dirIn, sn_dirOut, normalize(sn_dirIn + sn_dirOut));
+            const float m = multiPowerHeuristic(nBRDFSamples, pdfBRDF, nLightSamples, lightSample.pdf, 1);
+
+            // convert pdf to area measure
+            const float Wx = 1 / (pdfBRDF * G);
+            const float weight = m * luminance(targetPdf) * Wx;
+
+            if (luminance(targetPdf) > 0.f) {
+                updateReservoir(curReservoir, lightSample, weight, 1, nextHit.random());
+            } else {
+                curReservoir.count += 0;
+            }
+        }
+
+        // Cap count
         if (prevReservoir.valid) {
-            // Cap count
             prevReservoir.wSum /= prevReservoir.count;
             prevReservoir.wSum *= 20 * curReservoir.count;
             prevReservoir.count = 20 * curReservoir.count;
-
-            const LightSampleInfo &prevSample = prevReservoir.sample;
-            owl::vec3f prevTargetPdf = evalTargetPdf(prevSample, hit, mat, onb, false);
-            const float lum = luminance(prevTargetPdf);
-            const float weight = lum * prevReservoir.W * prevReservoir.count;
-            updateReservoir(curReservoir, prevSample, weight, prevReservoir.count, nextHit.random());
         }
+
+        // Merge reservoirs
+        mergeReservoirs(curReservoir, prevReservoir, hit, mat, onb, false, nextHit.random());
 
         // Re-evaluate weight
         owl::vec3f newTargetPdf = evalTargetPdf(curReservoir.sample, hit, mat, onb, false);

@@ -95,6 +95,7 @@ class Render {
         OWLBuffer texturesBuffer;
         // Env map
         OWLTexture envMap;
+        OWLBuffer alias;
     } owl{};
 
     Frame frame{};

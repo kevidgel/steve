@@ -9,16 +9,6 @@
 
 #include <cuda_runtime.h>
 
-__inline__ __device__ void mergeReservoirs(Reservoir &to, const Reservoir &from, const float sample) {
-    if (from.valid) {
-        to.wSum += from.wSum;
-        to.count += from.count;
-        if (sample < (from.wSum / to.wSum)) {
-            to.sample = from.sample;
-        }
-    }
-}
-
 __inline__ __device__ void updateReservoir(Reservoir &resr, const LightSampleInfo &lightSample, const float weight,
                                            const uint count, const float sample) {
     resr.count += count;

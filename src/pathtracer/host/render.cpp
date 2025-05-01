@@ -7,9 +7,11 @@
 #include "pathtracer/host/texture.hpp"
 #include "temporal.ptx.hpp"
 #include "spatial.ptx.hpp"
+#include "ImGuiFileDialog.h"
 
 #include <cuda_gl_interop.h>
 #include <spdlog/spdlog.h>
+#include <stb_image_write.h>
 
 namespace Screen {
 const int NUM_VERTICES = 8;
@@ -223,6 +225,14 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     // Get env map
     owl.envMap = loadImageOwl(envFilename, owl.ctx);
 
+    // Generate alias table
+    int aliasW = 1, aliasH = 1;
+    std::vector<Alias> alias(1);
+    if (owl.envMap) {
+        alias = buildEnvMapAlias(envFilename, aliasW, aliasH);
+    }
+    owl.alias = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Alias), alias.size(), alias.data());
+
     // Create materials buffer
     owl.matsBuffer = owlDeviceBufferCreate(owl.ctx, OWL_USER_TYPE(Material), scene->materialBuffer.mats.size(),
                                            scene->materialBuffer.mats.data());
@@ -285,6 +295,10 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
         {"reservoir0", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, reservoir0)},
         {"reservoir1", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, reservoir1)},
         {"spatialReservoir", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, spatialReservoir)},
+        {"alias", OWL_BUFPTR, OWL_OFFSETOF(LaunchParams, alias)},
+        {"aliasSize", OWL_INT2, OWL_OFFSETOF(LaunchParams, aliasSize)},
+        {"hasEnvMap", OWL_BOOL, OWL_OFFSETOF(LaunchParams, hasEnvMap)},
+        {"envMap", OWL_TEXTURE, OWL_OFFSETOF(LaunchParams, envMap)},
         {nullptr},
     };
 
@@ -324,38 +338,40 @@ Render::Render(std::unique_ptr<SceneBuffer> scene, std::unique_ptr<Camera> camer
     owlParamsSetBuffer(owl.launchParams, "reservoir0", owl.reservoir[0]);
     owlParamsSetBuffer(owl.launchParams, "reservoir1", owl.reservoir[1]);
     owlParamsSetBuffer(owl.launchParams, "spatialReservoir", owl.spatialReservoir);
+    owlParamsSetBuffer(owl.launchParams, "alias", owl.alias);
+    owlParamsSet2i(owl.launchParams, "aliasSize", aliasW, aliasH);
+    owlParamsSet1b(owl.launchParams, "hasEnvMap", (owl.envMap != nullptr));
+    owlParamsSetTexture(owl.launchParams, "envMap", owl.envMap);
 
     // Create miss program
     OWLVarDecl missProgVars[] = {
         {"envColor", OWL_FLOAT3, OWL_OFFSETOF(MissProgData, envColor)},
-        {"hasEnvMap", OWL_BOOL, OWL_OFFSETOF(MissProgData, hasEnvMap)},
-        {"envMap", OWL_TEXTURE, OWL_OFFSETOF(MissProgData, envMap)},
         {nullptr},
     };
 
     owl.lightingMissProg =
         owlMissProgCreate(owl.ctx, owl.lightingModule, "Miss", sizeof(MissProgData), missProgVars, -1);
     owlMissProgSet3f(owl.lightingMissProg, "envColor", {0.8f, 0.8f, 0.8f});
-    owlMissProgSet1b(owl.lightingMissProg, "hasEnvMap", (owl.envMap != nullptr));
-    owlMissProgSetTexture(owl.lightingMissProg, "envMap", owl.envMap);
+    // owlMissProgSet1b(owl.lightingMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    // owlMissProgSetTexture(owl.lightingMissProg, "envMap", owl.envMap);
 
     owl.temporalReSTIRMissProg =
         owlMissProgCreate(owl.ctx, owl.temporalReSTIRModule, "Miss2", sizeof(MissProgData), missProgVars, -1);
     owlMissProgSet3f(owl.temporalReSTIRMissProg, "envColor", {0.8f, 0.8f, 0.8f});
-    owlMissProgSet1b(owl.temporalReSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
-    owlMissProgSetTexture(owl.temporalReSTIRMissProg, "envMap", owl.envMap);
+    // owlMissProgSet1b(owl.temporalReSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    // owlMissProgSetTexture(owl.temporalReSTIRMissProg, "envMap", owl.envMap);
 
     owl.spatialReSTIRMissProg =
         owlMissProgCreate(owl.ctx, owl.spatialReSTIRModule, "Miss2", sizeof(MissProgData), missProgVars, -1);
     owlMissProgSet3f(owl.spatialReSTIRMissProg, "envColor", {0.8f, 0.8f, 0.8f});
-    owlMissProgSet1b(owl.spatialReSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
-    owlMissProgSetTexture(owl.spatialReSTIRMissProg, "envMap", owl.envMap);
+    // owlMissProgSet1b(owl.spatialReSTIRMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    // owlMissProgSetTexture(owl.spatialReSTIRMissProg, "envMap", owl.envMap);
 
     owl.gBufferMissProg =
         owlMissProgCreate(owl.ctx, owl.gBufferModule, "Miss", sizeof(MissProgData), missProgVars, -1);
     owlMissProgSet3f(owl.gBufferMissProg, "envColor", {0.8f, 0.8f, 0.8f});
-    owlMissProgSet1b(owl.gBufferMissProg, "hasEnvMap", (owl.envMap != nullptr));
-    owlMissProgSetTexture(owl.gBufferMissProg, "envMap", owl.envMap);
+    // owlMissProgSet1b(owl.gBufferMissProg, "hasEnvMap", (owl.envMap != nullptr));
+    // owlMissProgSetTexture(owl.gBufferMissProg, "envMap", owl.envMap);
 
 
     OWLVarDecl geometryPassVars[] = {
@@ -432,25 +448,26 @@ void Render::moveCamera(const CameraAction &action, float speed) {
     float delta = io.DeltaTime;
     float inc = speed * delta;
     owl::affine3f &transform = camera.transform;
+    float translateFactor = camera.translateSpeed;
 
     switch (action) {
     case MoveUp:
-        transform.p += transform.l.vy * inc;
+        transform.p += transform.l.vy * inc * translateFactor;
         break;
     case MoveDown:
-        transform.p -= transform.l.vy * inc;
+        transform.p -= transform.l.vy * inc * translateFactor;
         break;
     case MoveRight:
-        transform.p -= xfmVector(camera.xyaw(), transform.l.vx) * inc;
+        transform.p -= xfmVector(camera.xyaw(), transform.l.vx) * inc * translateFactor;
         break;
     case MoveLeft:
-        transform.p += xfmVector(camera.xyaw(), transform.l.vx) * inc;
+        transform.p += xfmVector(camera.xyaw(), transform.l.vx) * inc * translateFactor;
         break;
     case MoveForward:
-        transform.p += xfmVector(camera.xyaw(), transform.l.vz) * inc;
+        transform.p += xfmVector(camera.xyaw(), transform.l.vz) * inc * translateFactor;
         break;
     case MoveBackward:
-        transform.p -= xfmVector(camera.xyaw(), transform.l.vz) * inc;
+        transform.p -= xfmVector(camera.xyaw(), transform.l.vz) * inc * translateFactor;
         break;
     case RotateLeft:
         camera.yaw += 10 * inc;
@@ -499,6 +516,13 @@ void Render::update() {
         materialBuffer.dirty = false;
     }
 
+    // ImGuiIO &io = ImGui::GetIO();
+    // float delta = io.DeltaTime;
+    // float inc = 10.f * delta;
+    // owl::affine3f &transform = camera.transform;
+    // float translateFactor = camera.translateSpeed;
+    // transform.p += xfmVector(camera.xyaw(), transform.l.vz) * inc * translateFactor;
+
     frame.accum = frame.dirty ? 1 : frame.accum + 1;
     frame.id++;
 
@@ -533,6 +557,48 @@ void Render::update() {
     owlParamsSet1i(owl.launchParams, "camera.integrator", camera.integrator);
 }
 
+void saveFloatRGBAtoPNG(GLuint texID, int level = 0, const char* filename = "out.png") {
+    glBindTexture(GL_TEXTURE_2D, texID);
+    int w = 0, h = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH,  &w);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &h);
+    if (w <= 0 || h <= 0) {
+        fprintf(stderr, "Invalid texture size\n");
+        return;
+    }
+
+    std::vector<float> floatBuf(w * h * 4);
+    glGetTexImage(GL_TEXTURE_2D, level, GL_RGBA, GL_FLOAT, floatBuf.data());
+
+    auto linearToSRGB = [](float L) {
+        if      (L <= 0.0031308f) return L * 12.92f;
+        else                      return 1.055f * std::pow(L, 1.0f/2.4f) - 0.055f;
+    };
+
+    std::vector<unsigned char> byteBuf(w * h * 4);
+    for (size_t i = 0; i < floatBuf.size(); ++i) {
+        float L = std::clamp(floatBuf[i], 0.0f, 1.0f);
+        float s = std::clamp(linearToSRGB(L), 0.0f, 1.f);
+        byteBuf[i] = static_cast<unsigned char>(s * 255.0f + 0.5f);
+    }
+
+    for (int y = 0; y < h/2; ++y) {
+        int opp = h - 1 - y;
+        for (int x = 0; x < w; ++x) {
+            for (int c = 0; c < 4; ++c) {
+                std::swap(
+                    byteBuf[(y*w + x)*4 + c],
+                    byteBuf[(opp*w + x)*4 + c]
+                );
+            }
+        }
+    }
+
+    if (!stbi_write_png(filename, w, h, 4, byteBuf.data(), w * 4)) {
+        fprintf(stderr, "Failed to write PNG\n");
+    }
+}
+
 /// Launch kernel and display results per frame
 void Render::render() {
     ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -540,6 +606,7 @@ void Render::render() {
     ImGuizmo::SetOrthographic(false);
     ImGuizmo::BeginFrame();
 
+    static bool wantSave;
     const float toolbarWidth = 300.f;
     const ImVec2 toolbarPos =
         ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth, viewport->WorkPos.y);
@@ -551,6 +618,32 @@ void Render::render() {
     if (ImGui::CollapsingHeader("Render")) {
         ImGui::Text("Total samples: %d", frame.accum);
         ImGui::Checkbox("Enable frame accum.", &accumFrames);
+
+        if (ImGui::Button("Save Screenshot…")) {
+            // open the file‐save dialog, default filename “screenshot.png”
+            IGFD::FileDialogConfig config;
+            config.path = ".";
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SavePBO", "Save PNG", ".png\0.jpg\0", config);
+            wantSave = true;
+        }
+
+        // draw dialog when requested
+        if (wantSave)
+        {
+            if (ImGuiFileDialog::Instance()->Display("SavePBO"))
+            {
+                // User clicked OK
+                if (ImGuiFileDialog::Instance()->IsOk())
+                {
+                    std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                    saveFloatRGBAtoPNG(gl.dispTex, 0, filePath.c_str());
+                }
+                // close dialog
+                ImGuiFileDialog::Instance()->Close();
+                wantSave = false;
+            }
+        }
     }
     if (ImGui::CollapsingHeader("Camera")) {
         camera.renderProperties();
@@ -572,7 +665,7 @@ void Render::render() {
     ImGui::Begin("Render", nullptr, flags);
 
     // The most important lines
-    if (camera.integrator == 6) {
+    if (camera.integrator >= 6) {
         owlLaunch2D(owl.gBufferRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);
         cudaDeviceSynchronize();
         owlLaunch2D(owl.temporalReSTIRRayGen, camera.resolution.x, camera.resolution.y, owl.launchParams);

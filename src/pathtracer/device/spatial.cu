@@ -37,7 +37,12 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
             Li = mat.emission;
         } else {
             Reservoir curReservoir = tempReservoir;
-            for (int i = 0; i < 10; ++i) {
+            const int nSamples = 3;
+            float Z = curReservoir.count;
+            int neighbors[nSamples];
+            int counts[nSamples];
+            int sampleId = 0;
+            while (sampleId < nSamples) {
                 // Collect neighbor vars
                 owl::vec2f diskSample = 30.f * randomInUnitDisk({nextHit.random(), nextHit.random()});
                 owl::vec2i neighbor = pixelId + owl::vec2i(diskSample);
@@ -51,30 +56,48 @@ OPTIX_RAYGEN_PROGRAM(RayGen)() {
                 const GBufferInfo &neighborGBuf = optixLaunchParams.curReservoir == 0
                                                       ? optixLaunchParams.gBuffer0[neighborOffset]
                                                       : optixLaunchParams.gBuffer1[neighborOffset];
+
+                // Rejection
                 if (!neighborReservoir.valid) {
                     continue;
                 }
                 if (hit.mat != neighborGBuf.hitInfo.mat) {
                     continue;
                 }
-                if (dot(hit.sn, neighborGBuf.hitInfo.sn) < 0.9f) {
+                if (dot(hit.sn, neighborGBuf.hitInfo.sn) < 0.95f) {
                     continue;
                 }
                 if (fabsf(neighborGBuf.hitInfo.t / hit.t - 1.f) > 0.1) {
                     continue;
                 }
 
+                neighbors[sampleId] = neighborOffset;
+                counts[sampleId] = neighborReservoir.count;
+
                 // Update
-                const LightSampleInfo &neighborSample = neighborReservoir.sample;
-                owl::vec3f neighborTargetPdf = evalTargetPdf(neighborSample, hit, mat, onb, false);
-                const float lum = luminance(neighborTargetPdf);
-                float weight = lum * neighborReservoir.W * neighborReservoir.count;
-                updateReservoir(curReservoir, neighborSample, weight, neighborReservoir.count, nextHit.random());
+                mergeReservoirs(curReservoir, neighborReservoir, hit, mat, onb, false, nextHit.random());
+
+                sampleId++;
+            }
+
+            if (optixLaunchParams.camera.integrator == 7) {
+                Z = curReservoir.count;
+            } else {
+                for (int i = 0; i < sampleId; ++i) {
+                    const GBufferInfo &neighbor = optixLaunchParams.curReservoir == 0
+                                                      ? optixLaunchParams.gBuffer0[neighbors[i]]
+                                                      : optixLaunchParams.gBuffer1[neighbors[i]];
+                    ONB neighborONB(neighbor.hitInfo.sn);
+                    if (luminance(evalTargetPdf(curReservoir.sample, neighbor.hitInfo, neighbor.mat, neighborONB,
+                                                true)) > 0) {
+                        Z += counts[i];
+                    }
+                }
             }
 
             owl::vec3f newTargetPdf = evalTargetPdf(curReservoir.sample, hit, mat, onb, true);
             float lum = luminance(newTargetPdf);
-            curReservoir.W = (lum > 0) ? curReservoir.wSum / (curReservoir.count * lum) : 0;
+            curReservoir.W = (lum > 0 && Z > 0) ? curReservoir.wSum / (Z * lum) : 0;
 
             Li = curReservoir.W * newTargetPdf;
             spatialReservoir_ = curReservoir;

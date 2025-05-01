@@ -7,3 +7,6 @@
 [submodule "ext/tinygltf"]
 	path = ext/tinygltf
 	url = https://github.com/syoyo/tinygltf.git
+[submodule "ext/ImGuiFileDialog"]
+	path = ext/ImGuiFileDialog
+	url = https://github.com/aiekick/ImGuiFileDialog.git

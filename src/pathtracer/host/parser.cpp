@@ -6,6 +6,7 @@
 using json = nlohmann::json;
 std::unique_ptr<Camera> parseCamera(const json &j);
 std::unique_ptr<SceneBuffer> parseScene(const json &j);
+std::string parseEnv(const json &j);
 
 Result parseFile(const std::filesystem::path &filename) {
     spdlog::info("Parsing {}", filename.string());
@@ -14,8 +15,9 @@ Result parseFile(const std::filesystem::path &filename) {
 
     std::unique_ptr<Camera> camera = parseCamera(j);
     std::unique_ptr<SceneBuffer> scene = parseScene(j);
+    std::string env = parseEnv(j);
 
-    return {std::move(scene), std::move(camera)};
+    return {std::move(scene), std::move(camera), env};
 }
 
 std::unique_ptr<Camera> parseCamera(const json &j) {
@@ -44,4 +46,10 @@ std::unique_ptr<SceneBuffer> parseScene(const json &j) {
         }
     }
     throw std::runtime_error("Scene not found!");
+}
+std::string parseEnv(const json &j) {
+    if (j.contains("env")) {
+        return j["env"];
+    }
+    return "";
 }

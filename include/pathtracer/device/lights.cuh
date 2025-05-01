@@ -1,13 +1,13 @@
 /**
-* @file lights.cuh
-* @brief Definitions and helper functions for lights sampling
-*/
+ * @file lights.cuh
+ * @brief Definitions and helper functions for lights sampling
+ */
 
 #pragma once
 
-#include "owl/common/math/vec.h"
-#include "integrator_defs.cuh"
 #include "integrator.cuh"
+#include "integrator_defs.cuh"
+#include "owl/common/math/vec.h"
 #include "ray.cuh"
 
 __inline__ __device__ void sampleLight(const owl::vec3f &p, const owl::vec3f &sample, LightSampleInfo &scatter) {
@@ -56,6 +56,44 @@ __inline__ __device__ float pdfLight(const owl::Ray &ray, const RayInfo &prd) {
         pdf = dist2 / (optixLaunchParams.lights.size * prd.hitInfo.area * cos);
     }
     return pdf;
+}
+
+__inline__ __device__ owl::vec3f sampleEnvMap(const owl::vec2f &sample) {
+    Alias *table = optixLaunchParams.alias;
+    int W = optixLaunchParams.aliasSize.x;
+    int H = optixLaunchParams.aliasSize.y;
+    int N = W * H;
+    int idx = min(int(sample.x * N), N - 1);
+    idx = (sample.y < table[idx].prob) ? idx : table[idx].alias;
+
+    int j = idx / W, i = idx % W;
+    float u = (i + 0.5f) / float(W);
+    float v = (j + 0.5f) / float(H);
+
+    float phi = u * 2.0f * M_PI - M_PI;
+    float theta = v * M_PI;
+    float sinTheta = sinf(theta), cosTheta = cosf(theta);
+    return (cosf(phi) * sinTheta, cosTheta, sinf(phi) * sinTheta);
+}
+
+__inline__ __device__ float pdfEnvMap(const owl::vec3f &dir) {
+    Alias *table = optixLaunchParams.alias;
+    int W = optixLaunchParams.aliasSize.x;
+    int H = optixLaunchParams.aliasSize.y;
+
+    const float theta = acosf(dir.y);
+    const float phi = atan2f(dir.z, dir.x);
+
+    const float u = (phi + M_PI) * 0.5f * (1.0f / M_PI);
+    const float v = theta * (1.f / M_PI);
+
+    int i = min(int(u * W), W - 1), j = min(int(v * H), H - 1), idx = j * W + i;
+
+    float p_k = table[idx].pdf;
+    float dPhi = 2*M_PI/float(W);
+    float dTheta = M_PI/float(H);
+    float solid = dPhi * dTheta * sin(theta);
+    return (solid > 0.f) ? (p_k / solid) : 0.f;
 }
 
 /// Extremely inefficient
