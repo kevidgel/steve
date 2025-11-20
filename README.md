@@ -4,6 +4,10 @@
 
 ![renderer](steve.png)
 
+### Technical Award Winner for 15-468 Spring 2025 
+
+[Link [https://graphics.cs.cmu.edu/courses/15-468/rendering_competition.html]](https://graphics.cs.cmu.edu/courses/15-468/rendering_competition.html)
+
 ## About
 
 Steve is a GPU-accelerated photorealistic rendering engine implementing a physically-based pathtracer with advanced sampling techniques. It leverages NVIDIA CUDA and OptiX for real-time ray tracing on modern GPUs, combined with ReSTIR (Restir importance sampling with spatial and temporal resampling) for variance reduction and improved image quality.
