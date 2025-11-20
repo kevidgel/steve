@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(CMAKE_CUDA_STANDARD 14)
+set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # Packages
@@ -147,7 +147,7 @@ add_library(steve_lib STATIC
 
 target_include_directories(steve_lib PUBLIC
         ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/ext/owl/owl/include
+        ${CMAKE_SOURCE_DIR}/ext/owl/include
         ${CMAKE_SOURCE_DIR}/ext/rapidobj/include
         ${CMAKE_SOURCE_DIR}/ext/tinygltf/
         ${CMAKE_CURRENT_BINARY_DIR}/generated

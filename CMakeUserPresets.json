@@ -8,8 +8,8 @@
         "VCPKG_ROOT": "/opt/vcpkg"
       },
       "cacheVariables": {
-        "CMAKE_CUDA_COMPILER": "/usr/local/cuda-12.6/bin/nvcc",
-        "OptiX_ROOT_DIR": "/opt/NVIDIA-OptiX-SDK-8.0.0-linux64-x86_64/",
+        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc",
+        "OptiX_ROOT_DIR": "/opt/NVIDIA-OptiX-SDK-9.0.0-linux64-x86_64/",
         "CMAKE_CUDA_ARCHITECTURES": "native"
       }
     }

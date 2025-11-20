@@ -73,7 +73,7 @@ __inline__ __device__ owl::vec3f sampleEnvMap(const owl::vec2f &sample) {
     float phi = u * 2.0f * M_PI - M_PI;
     float theta = v * M_PI;
     float sinTheta = sinf(theta), cosTheta = cosf(theta);
-    return (cosf(phi) * sinTheta, cosTheta, sinf(phi) * sinTheta);
+    return {cosf(phi) * sinTheta, cosTheta, sinf(phi) * sinTheta};
 }
 
 __inline__ __device__ float pdfEnvMap(const owl::vec3f &dir) {

@@ -1,0 +1,20 @@
+{
+  "camera": {
+    "transform": {
+      "x": [1, 0, 0],
+      "y": [0, 1, 0],
+      "z": [0, 0, 1],
+      "o": [5, 2, -3]
+    },
+    "yaw": -57.0,
+    "pitch": 16.0,
+    "sensor_size": [1.0, 1.0],
+    "resolution": [700, 700],
+    "focal_dist": 1.0,
+    "aperture_radius": 0.0
+  },
+  "scene": {
+    "path": "scenes/fireplace_room.obj"
+  },
+  "env": ""
+}

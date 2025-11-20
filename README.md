@@ -21,7 +21,7 @@ Steve is a GPU-accelerated photorealistic rendering engine implementing a physic
 ## Technology Stack
 
 - **Languages**: C++20 (host), CUDA (device), GLSL (shaders)
-- **GPU API**: NVIDIA CUDA 14 + OptiX ray tracing
+- **GPU API**: CUDA Toolkit 12.0+ and OptiX 7.0+
 - **Graphics**: OpenGL 3.3+ with GLAD + GLFW3
 - **Build System**: CMake 3.25+ with Ninja
 - **Package Management**: vcpkg
@@ -39,7 +39,8 @@ Steve is a GPU-accelerated photorealistic rendering engine implementing a physic
 ### Prerequisites
 
 - NVIDIA GPU with CUDA compute capability (e.g., RTX series)
-- CUDA 14 compatible driver
+- CUDA 12.0+ compatible driver
+- OptiX 7.0+ SDK
 - CMake 3.25 or higher
 - C++ compiler with C++20 support (clang or g++)
 - vcpkg installed and `VCPKG_ROOT` environment variable set
@@ -53,7 +54,7 @@ Steve is a GPU-accelerated photorealistic rendering engine implementing a physic
 
 2. **Generate build files**:
    ```bash
-   cmake --preset vcpkg
+   cmake --preset default # Check CMakeUserPresets.json to set appropraite build variables
    ```
 
 3. **Build the project**:
@@ -70,6 +71,10 @@ Run the pathtracer with a scene configuration file:
 ```bash
 ./steve path/to/scene.json
 ```
+A sample scene configuration can be found in `/scene.json`, which renders `fireplace_room`. The model can be downloaded via `download_scenes.sh`.
+
+> [!WARNING]
+> This project uses OpenGL, which may automatically pick the integrated graphics card instead of your NVIDIA discrete graphics card. On Linux, a workaround is by prepending these environment variables: `__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia` when executing the binary.
 
 The scene JSON file specifies:
 - Camera position, field of view, and viewport settings
@@ -85,6 +90,13 @@ Once running, use the ImGui interface to:
 - Modify material properties
 - Control rendering settings
 - Export rendered frames
+
+
+Alternatively, keyboard controls can be used. WASD control the position of the camera, and arrow keys control the direction of the viewport.
+
+## Known Bugs
+- For scenes with 0 emissive primitives, integrators other than the base Direct and BRDF integrators will crash the program. This is because it creates a lights mesh of 0 objects.
+- I recently updated the OWL dependency, and it has slightly different resource handling than the previous version I used, which may lead to some assertions failing during exit. 
 
 ## Project Structure
 

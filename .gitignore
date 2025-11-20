@@ -5,3 +5,4 @@ images
 .idea
 build
 .vscode
+*.ini
